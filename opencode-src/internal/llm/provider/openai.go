@@ -169,7 +169,8 @@ func (o *openaiClient) preparedParams(messages []openai.ChatCompletionMessagePar
 
 	if o.providerOptions.model.CanReason == true {
 		params.MaxCompletionTokens = openai.Int(o.providerOptions.maxTokens)
-		params.ReasoningEffort = shared.ReasoningEffort(o.options.reasoningEffort)
+		effort := o.providerOptions.model.ClampEffort(o.options.reasoningEffort)
+		params.ReasoningEffort = shared.ReasoningEffort(effort)
 	} else {
 		params.MaxTokens = openai.Int(o.providerOptions.maxTokens)
 	}
@@ -441,8 +442,9 @@ func (o *openaiClient) preparedResponsesParams(input responses.ResponseInputPara
 	}
 
 	if o.providerOptions.model.CanReason {
+		effort := o.providerOptions.model.ClampEffort(o.options.reasoningEffort)
 		params.Reasoning = shared.ReasoningParam{
-			Effort: shared.ReasoningEffort(o.options.reasoningEffort),
+			Effort: shared.ReasoningEffort(effort),
 		}
 	}
 
@@ -729,15 +731,13 @@ func WithOpenAIDisableCache() OpenAIOption {
 
 func WithReasoningEffort(effort string) OpenAIOption {
 	return func(options *openaiOptions) {
-		defaultReasoningEffort := "medium"
 		switch effort {
 		case "none", "minimal", "low", "medium", "high", "xhigh":
-			defaultReasoningEffort = effort
+			options.reasoningEffort = effort
 		case "":
 			// Keep default; don't warn on empty.
 		default:
 			logging.Warn("Invalid reasoning effort, using default: medium")
 		}
-		options.reasoningEffort = defaultReasoningEffort
 	}
 }

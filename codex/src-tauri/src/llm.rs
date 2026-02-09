@@ -7,10 +7,6 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
-fn openai_supports_reasoning_effort(model: &str) -> bool {
-    model.starts_with("gpt-5") || model.starts_with('o') || model.starts_with("codex-")
-}
-
 fn openai_supports_verbosity(model: &str) -> bool {
     model.starts_with("gpt-5")
 }
@@ -40,11 +36,59 @@ fn extract_response_output_text(parsed: &serde_json::Value) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
-fn normalize_reasoning_effort(effort: &str) -> Option<&str> {
-    match effort {
-        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => Some(effort),
-        _ => None,
+/// Per-model supported reasoning effort levels (from OpenAI docs).
+fn supported_efforts(model: &str) -> Option<&'static [&'static str]> {
+    // Exact prefix matching, longest first
+    let table: &[(&str, &[&str])] = &[
+        ("gpt-5.2-pro",       &["medium", "high", "xhigh"]),
+        ("gpt-5.2-codex",     &["low", "medium", "high", "xhigh"]),
+        ("gpt-5.2",           &["none", "low", "medium", "high", "xhigh"]),
+        ("gpt-5.1-codex-max", &["low", "medium", "high", "xhigh"]),
+        ("gpt-5.1-codex-mini",&["low", "medium", "high"]),
+        ("gpt-5.1-codex",     &["low", "medium", "high"]),
+        ("gpt-5.1",           &["none", "low", "medium", "high"]),
+        ("gpt-5-pro",         &["high"]),
+        ("gpt-5-codex",       &["low", "medium", "high"]),
+        ("gpt-5-mini",        &["minimal", "low", "medium", "high"]),
+        ("gpt-5-nano",        &["minimal", "low", "medium", "high"]),
+        ("gpt-5",             &["minimal", "low", "medium", "high"]),
+        ("o1",                &["low", "medium", "high"]),
+        ("o3",                &["low", "medium", "high"]),
+        ("o4",                &["low", "medium", "high"]),
+    ];
+    for (prefix, efforts) in table {
+        if model.starts_with(prefix) {
+            return Some(efforts);
+        }
     }
+    None
+}
+
+fn normalize_reasoning_effort<'a>(effort: &'a str, model: &str) -> Option<&'a str> {
+    let valid = match supported_efforts(model) {
+        Some(v) => v,
+        None => return None, // model doesn't support reasoning
+    };
+    // Direct match
+    if valid.contains(&effort) {
+        return Some(effort);
+    }
+    // Clamp: walk down then up in canonical ordering
+    let order: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh"];
+    let idx = order.iter().position(|&o| o == effort)?;
+    // Walk down
+    for i in (0..=idx).rev() {
+        if valid.contains(&order[i]) {
+            return Some(valid[valid.iter().position(|&v| v == order[i]).unwrap()]);
+        }
+    }
+    // Walk up
+    for i in (idx + 1)..order.len() {
+        if valid.contains(&order[i]) {
+            return Some(valid[valid.iter().position(|&v| v == order[i]).unwrap()]);
+        }
+    }
+    Some(valid[valid.len() / 2])
 }
 
 fn normalize_verbosity(verbosity: &str) -> Option<&str> {
@@ -142,8 +186,8 @@ pub async fn stream_openai(
             }
         });
 
-        if openai_supports_reasoning_effort(&model) {
-            if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str()) {
+        {
+            if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str(), &model) {
                 body["reasoning"] = serde_json::json!({ "effort": effort });
             }
         }
@@ -253,8 +297,8 @@ pub async fn stream_openai(
             "messages": chat_messages
         });
 
-        if openai_supports_reasoning_effort(&model) {
-            if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str()) {
+        {
+            if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str(), &model) {
                 body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
             }
         }

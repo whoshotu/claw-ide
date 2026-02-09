@@ -13,14 +13,77 @@ import TerminalPanel from "./components/TerminalPanel";
 import CommitDialog from "./components/CommitDialog";
 
 
-const EFFORTS = [
-  { id: "none", name: "None" },
-  { id: "minimal", name: "Minimal" },
-  { id: "low", name: "Low" },
-  { id: "medium", name: "Medium" },
-  { id: "high", name: "High" },
-  { id: "xhigh", name: "XHigh" },
-];
+// Per-model supported reasoning effort levels (from OpenAI docs)
+// Models not listed here don't support reasoning effort.
+const MODEL_EFFORTS = {
+  // GPT-5.2 family
+  "gpt-5.2":          ["none", "low", "medium", "high", "xhigh"],
+  "gpt-5.2-pro":      ["medium", "high", "xhigh"],
+  "gpt-5.2-codex":    ["low", "medium", "high", "xhigh"],
+  // GPT-5.1 family
+  "gpt-5.1":          ["none", "low", "medium", "high"],
+  "gpt-5.1-codex":    ["low", "medium", "high"],
+  "gpt-5.1-codex-mini": ["low", "medium", "high"],
+  "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
+  // GPT-5 family
+  "gpt-5":            ["minimal", "low", "medium", "high"],
+  "gpt-5-pro":        ["high"],
+  "gpt-5-codex":      ["low", "medium", "high"],
+  "gpt-5-mini":       ["minimal", "low", "medium", "high"],
+  "gpt-5-nano":       ["minimal", "low", "medium", "high"],
+  // o-series
+  "o1":     ["low", "medium", "high"],
+  "o1-pro": ["low", "medium", "high"],
+  "o1-mini": ["low", "medium", "high"],
+  "o3":     ["low", "medium", "high"],
+  "o3-mini": ["low", "medium", "high"],
+  "o3-pro": ["low", "medium", "high"],
+  "o4-mini": ["low", "medium", "high"],
+};
+
+const EFFORT_LABELS = {
+  none: "None", minimal: "Minimal", low: "Low",
+  medium: "Medium", high: "High", xhigh: "XHigh",
+};
+
+// Returns valid effort options for a model, or empty array if it doesn't support reasoning
+function getEffortOptions(model) {
+  if (!model) return [];
+  // Try exact match first, then prefix match (e.g. "gpt-5.2-2025-12-11" → "gpt-5.2")
+  let efforts = MODEL_EFFORTS[model];
+  if (!efforts) {
+    const key = Object.keys(MODEL_EFFORTS)
+      .sort((a, b) => b.length - a.length) // longest prefix first
+      .find((k) => model.startsWith(k));
+    efforts = key ? MODEL_EFFORTS[key] : null;
+  }
+  if (!efforts) {
+    // Anthropic reasoning models
+    if (/claude.*(3[.-]7|4|opus|sonnet-4)/.test(model)) {
+      efforts = ["low", "medium", "high"];
+    }
+  }
+  if (!efforts) return [];
+  return efforts.map((id) => ({ id, name: EFFORT_LABELS[id] || id }));
+}
+
+function clampEffort(effort, model) {
+  const valid = getEffortOptions(model);
+  if (valid.length === 0) return effort; // no reasoning — keep stored value, won't be sent
+  if (valid.some((e) => e.id === effort)) return effort;
+  // Pick the closest valid option
+  const all = ["none", "minimal", "low", "medium", "high", "xhigh"];
+  const idx = all.indexOf(effort);
+  // Walk down from current level to find a supported one
+  for (let i = idx; i >= 0; i--) {
+    if (valid.some((e) => e.id === all[i])) return all[i];
+  }
+  // Walk up if nothing below works
+  for (let i = idx + 1; i < all.length; i++) {
+    if (valid.some((e) => e.id === all[i])) return all[i];
+  }
+  return valid[Math.floor(valid.length / 2)].id; // fallback to middle
+}
 
 const COMMANDS = [
   { cmd: "/compact", description: "Compact conversation into a summary checkpoint" },
@@ -1236,8 +1299,8 @@ export default function App() {
           effort={settings.effort}
           models={models}
           modelsLoading={modelsLoading}
-          efforts={EFFORTS}
-          onModelChange={(m) => setSettings((s) => ({ ...s, model: m }))}
+          efforts={getEffortOptions(settings.model)}
+          onModelChange={(m) => setSettings((s) => ({ ...s, model: m, effort: clampEffort(s.effort, m) }))}
           onEffortChange={(e) => setSettings((s) => ({ ...s, effort: e }))}
           hasProject={!!activeProjectId}
           hasApiKey={hasApiKey}
@@ -1306,6 +1369,8 @@ export default function App() {
           models={models}
           onSave={handleSaveSettings}
           onClose={() => setShowSettings(false)}
+          getEffortOptions={getEffortOptions}
+          clampEffort={clampEffort}
         />
       )}
     </div>

@@ -289,7 +289,8 @@ func (c *copilotClient) preparedParams(messages []openai.ChatCompletionMessagePa
 
 	if c.providerOptions.model.CanReason == true {
 		params.MaxCompletionTokens = openai.Int(c.providerOptions.maxTokens)
-		params.ReasoningEffort = shared.ReasoningEffort(c.options.reasoningEffort)
+		effort := c.providerOptions.model.ClampEffort(c.options.reasoningEffort)
+		params.ReasoningEffort = shared.ReasoningEffort(effort)
 	} else {
 		params.MaxTokens = openai.Int(c.providerOptions.maxTokens)
 	}
@@ -637,16 +638,14 @@ func (c *copilotClient) usage(completion openai.ChatCompletion) TokenUsage {
 
 func WithCopilotReasoningEffort(effort string) CopilotOption {
 	return func(options *copilotOptions) {
-		defaultReasoningEffort := "medium"
 		switch effort {
 		case "none", "minimal", "low", "medium", "high", "xhigh":
-			defaultReasoningEffort = effort
+			options.reasoningEffort = effort
 		case "":
 			// Keep default; don't warn on empty.
 		default:
 			logging.Warn("Invalid reasoning effort, using default: medium")
 		}
-		options.reasoningEffort = defaultReasoningEffort
 	}
 }
 

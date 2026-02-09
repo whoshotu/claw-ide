@@ -37,6 +37,7 @@ var OpenAIModels = map[ModelID]Model{
 		CanReason:           true,
 		SupportsAttachments: false,
 		UseResponsesAPI:     true,
+		SupportedEfforts:    []string{"none", "low", "medium", "high", "xhigh"},
 	},
 	GPT52Pro: {
 		ID:                  GPT52Pro,
@@ -52,6 +53,7 @@ var OpenAIModels = map[ModelID]Model{
 		CanReason:           true,
 		SupportsAttachments: false,
 		UseResponsesAPI:     true,
+		SupportedEfforts:    []string{"medium", "high", "xhigh"},
 	},
 	GPT51Codex: {
 		ID:                  GPT51Codex,
@@ -67,6 +69,7 @@ var OpenAIModels = map[ModelID]Model{
 		CanReason:           true,
 		SupportsAttachments: false,
 		UseResponsesAPI:     true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	GPT51CodexMax: {
 		ID:                  GPT51CodexMax,
@@ -82,6 +85,7 @@ var OpenAIModels = map[ModelID]Model{
 		CanReason:           true,
 		SupportsAttachments: false,
 		UseResponsesAPI:     true,
+		SupportedEfforts:    []string{"low", "medium", "high", "xhigh"},
 	},
 	GPT51CodexMini: {
 		ID:                  GPT51CodexMini,
@@ -97,6 +101,7 @@ var OpenAIModels = map[ModelID]Model{
 		CanReason:           true,
 		SupportsAttachments: false,
 		UseResponsesAPI:     true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	GPT41: {
 		ID:                  GPT41,
@@ -188,6 +193,7 @@ var OpenAIModels = map[ModelID]Model{
 		DefaultMaxTokens:    50000,
 		CanReason:           true,
 		SupportsAttachments: true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	O1Pro: {
 		ID:                  O1Pro,
@@ -202,6 +208,7 @@ var OpenAIModels = map[ModelID]Model{
 		DefaultMaxTokens:    50000,
 		CanReason:           true,
 		SupportsAttachments: true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	O1Mini: {
 		ID:                  O1Mini,
@@ -216,6 +223,7 @@ var OpenAIModels = map[ModelID]Model{
 		DefaultMaxTokens:    50000,
 		CanReason:           true,
 		SupportsAttachments: true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	O3: {
 		ID:                  O3,
@@ -229,6 +237,7 @@ var OpenAIModels = map[ModelID]Model{
 		ContextWindow:       200_000,
 		CanReason:           true,
 		SupportsAttachments: true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	O3Mini: {
 		ID:                  O3Mini,
@@ -243,6 +252,7 @@ var OpenAIModels = map[ModelID]Model{
 		DefaultMaxTokens:    50000,
 		CanReason:           true,
 		SupportsAttachments: false,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 	O4Mini: {
 		ID:                  O4Mini,
@@ -257,5 +267,6 @@ var OpenAIModels = map[ModelID]Model{
 		DefaultMaxTokens:    50000,
 		CanReason:           true,
 		SupportsAttachments: true,
+		SupportedEfforts:    []string{"low", "medium", "high"},
 	},
 }

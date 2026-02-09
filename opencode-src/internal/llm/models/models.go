@@ -21,6 +21,50 @@ type Model struct {
 	CanReason           bool          `json:"can_reason"`
 	SupportsAttachments bool          `json:"supports_attachments"`
 	UseResponsesAPI     bool          `json:"use_responses_api"`
+	// Supported reasoning effort levels for this model (e.g. ["low","medium","high","xhigh"]).
+	// Empty means no reasoning support or no effort parameter needed.
+	SupportedEfforts []string `json:"supported_efforts,omitempty"`
+}
+
+// ClampEffort returns a valid effort for the model. If the requested effort is
+// not in SupportedEfforts, it picks the nearest supported level.
+func (m Model) ClampEffort(effort string) string {
+	if len(m.SupportedEfforts) == 0 {
+		return effort // model has no effort support; pass through
+	}
+	for _, e := range m.SupportedEfforts {
+		if e == effort {
+			return effort
+		}
+	}
+	// Walk the canonical ordering to find the nearest supported level
+	order := []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+	idx := -1
+	for i, o := range order {
+		if o == effort {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return m.SupportedEfforts[len(m.SupportedEfforts)/2] // fallback to middle
+	}
+	// Walk down first, then up
+	for i := idx; i >= 0; i-- {
+		for _, e := range m.SupportedEfforts {
+			if e == order[i] {
+				return e
+			}
+		}
+	}
+	for i := idx + 1; i < len(order); i++ {
+		for _, e := range m.SupportedEfforts {
+			if e == order[i] {
+				return e
+			}
+		}
+	}
+	return m.SupportedEfforts[0]
 }
 
 // Model IDs

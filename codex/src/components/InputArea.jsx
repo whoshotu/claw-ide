@@ -172,36 +172,38 @@ export default function InputArea({
                 </div>
               )}
             </div>
-            <div className="dropdown-wrapper" ref={effortBtnRef}>
-              <button
-                className="control-pill"
-                onClick={() => {
-                  setShowEffortDropdown(!showEffortDropdown);
-                  setShowModelDropdown(false);
-                }}
-              >
-                <span>{effortDisplay}</span>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
-              </button>
-              {showEffortDropdown && (
-                <div className="dropdown-menu bottom">
-                  {efforts.map((e) => (
-                    <div
-                      key={e.id}
-                      className={`dropdown-item ${effort === e.id ? "selected" : ""}`}
-                      onClick={() => {
-                        onEffortChange(e.id);
-                        setShowEffortDropdown(false);
-                      }}
-                    >
-                      {e.name}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {efforts.length > 0 && (
+              <div className="dropdown-wrapper" ref={effortBtnRef}>
+                <button
+                  className="control-pill"
+                  onClick={() => {
+                    setShowEffortDropdown(!showEffortDropdown);
+                    setShowModelDropdown(false);
+                  }}
+                >
+                  <span>{effortDisplay}</span>
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
+                {showEffortDropdown && (
+                  <div className="dropdown-menu bottom">
+                    {efforts.map((e) => (
+                      <div
+                        key={e.id}
+                        className={`dropdown-item ${effort === e.id ? "selected" : ""}`}
+                        onClick={() => {
+                          onEffortChange(e.id);
+                          setShowEffortDropdown(false);
+                        }}
+                      >
+                        {e.name}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="input-controls-right">
             <span className="shortcut-hint">Enter to send</span>

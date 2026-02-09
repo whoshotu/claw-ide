@@ -131,6 +131,7 @@ fn ensure_opencode_config(project_dir: &str, settings: &Settings) {
         &settings.model
     };
 
+    // Pass effort through as-is; the opencode binary clamps per-model via SupportedEfforts
     let reasoning_effort = match settings.effort.as_str() {
         "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => Some(settings.effort.as_str()),
         _ => None,

@@ -8,10 +8,10 @@ const PROVIDERS = [
   { id: "azure", name: "Azure OpenAI" },
 ];
 
-export default function SettingsDialog({ settings, models, onSave, onClose }) {
+export default function SettingsDialog({ settings, models, onSave, onClose, getEffortOptions, clampEffort }) {
   const [form, setForm] = useState({
     ...settings,
-    effort: settings.effort || "high",
+    effort: clampEffort(settings.effort || "high", settings.model),
     verbosity: settings.verbosity || "medium",
   });
   const [localModels, setLocalModels] = useState(models);
@@ -48,7 +48,8 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
         // Auto-select first model if current model doesn't exist in new list
         const exists = result.some((m) => m.id === form.model);
         if (!exists) {
-          setForm((f) => ({ ...f, model: result[0].id }));
+          const newModel = result[0].id;
+          setForm((f) => ({ ...f, model: newModel, effort: clampEffort(f.effort, newModel) }));
         }
       }
     } catch (e) {
@@ -68,7 +69,8 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
       gemini: "gemini-2.0-flash",
       azure: "",
     };
-    setForm((f) => ({ ...f, provider, model: defaults[provider] || "" }));
+    const newModel = defaults[provider] || "";
+    setForm((f) => ({ ...f, provider, model: newModel, effort: clampEffort(f.effort, newModel) }));
   }
 
   function handleSave() {
@@ -172,7 +174,14 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
             <div className="dir-input-row">
               <select
                 value={form.model}
-                onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+                onChange={(e) => {
+                  const newModel = e.target.value;
+                  setForm((f) => ({
+                    ...f,
+                    model: newModel,
+                    effort: clampEffort(f.effort, newModel),
+                  }));
+                }}
               >
                 {displayModels.length > 0 ? (
                   displayModels.map((m) => (
@@ -197,20 +206,19 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
             )}
           </div>
 
-          <div className="setting-group">
-            <label>Reasoning Effort</label>
-            <select
-              value={form.effort}
-              onChange={(e) => setForm((f) => ({ ...f, effort: e.target.value }))}
-            >
-              <option value="none">None</option>
-              <option value="minimal">Minimal</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="xhigh">XHigh</option>
-            </select>
-          </div>
+          {getEffortOptions(form.model).length > 0 && (
+            <div className="setting-group">
+              <label>Reasoning Effort</label>
+              <select
+                value={form.effort}
+                onChange={(e) => setForm((f) => ({ ...f, effort: e.target.value }))}
+              >
+                {getEffortOptions(form.model).map((e) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {form.provider === "openai" && (
             <div className="setting-group">
