@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { open } from "@tauri-apps/plugin-shell";
 import { marked } from "marked";
 import hljs from "highlight.js";
 
@@ -190,10 +191,21 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
     shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 100;
   }
 
+  function handleClick(e) {
+    const anchor = e.target.closest("a[href]");
+    if (anchor) {
+      e.preventDefault();
+      const href = anchor.getAttribute("href");
+      if (href && (href.startsWith("http://") || href.startsWith("https://"))) {
+        open(href).catch(() => {});
+      }
+    }
+  }
+
   const hasActivity = streamingActivity && streamingActivity.length > 0;
 
   return (
-    <div className="messages-area" ref={containerRef} onScroll={handleScroll}>
+    <div className="messages-area" ref={containerRef} onScroll={handleScroll} onClick={handleClick}>
       <div className="messages-container">
         {messages.map((msg, idx) => {
           if (msg.role === "compact") {
@@ -228,7 +240,7 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
             <div key={idx} className={`message ${msg.role}`}>
               <div className="message-header">
                 <span className="message-role">
-                  {msg.role === "user" ? "You" : "Codex"}
+                  {msg.role === "user" ? "You" : "OpenCodex"}
                 </span>
               </div>
               <div className="message-content">
@@ -240,7 +252,7 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
         {isStreaming && (hasActivity || streamingText) && (
           <div className="message assistant">
             <div className="message-header">
-              <span className="message-role">Codex</span>
+              <span className="message-role">OpenCodex</span>
             </div>
             <div className="message-content">
               {hasActivity && <StreamingActivity activity={streamingActivity} />}
@@ -251,7 +263,7 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
         {isStreaming && !hasActivity && !streamingText && (
           <div className="message assistant">
             <div className="message-header">
-              <span className="message-role">Codex</span>
+              <span className="message-role">OpenCodex</span>
             </div>
             <div className="thinking-indicator">
               <div className="thinking-dots">

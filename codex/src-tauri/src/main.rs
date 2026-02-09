@@ -459,29 +459,22 @@ async fn cancel_opencode(state: tauri::State<'_, opencode::OpenCodeState>) -> Re
     Ok(())
 }
 
-// --- Fetch Models from OpenAI ---
+// --- Fetch Models (provider-aware) ---
 #[derive(Serialize)]
 struct ModelInfo {
     id: String,
     name: String,
 }
 
-#[tauri::command]
-async fn fetch_models(api_key: String) -> Result<Vec<ModelInfo>, String> {
-    let key = if !api_key.is_empty() {
-        api_key
-    } else {
-        std::env::var("OPENAI_API_KEY").unwrap_or_default()
-    };
-
-    if key.is_empty() {
-        return Err("API key not set".to_string());
+async fn fetch_openai_models(api_key: String) -> Result<Vec<ModelInfo>, String> {
+    if api_key.is_empty() {
+        return Err("OpenAI API key not set".to_string());
     }
 
     let client = reqwest::Client::new();
     let response = client
         .get("https://api.openai.com/v1/models")
-        .header("Authorization", format!("Bearer {}", key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -502,32 +495,18 @@ async fn fetch_models(api_key: String) -> Result<Vec<ModelInfo>, String> {
     if let Some(data) = body["data"].as_array() {
         for model in data {
             if let Some(id) = model["id"].as_str() {
-                if id.starts_with("ft:") {
-                    continue;
-                }
-                if id.contains("-2024-") || id.contains("-2025-") {
-                    continue;
-                }
+                if id.starts_with("ft:") { continue; }
+                if id.contains("-2024-") || id.contains("-2025-") { continue; }
                 let is_chat_family = id.starts_with("gpt-")
                     || id.starts_with("o1")
                     || id.starts_with("o3")
                     || id.starts_with("o4")
                     || id.starts_with("chatgpt")
                     || id.starts_with("codex-");
-                if !is_chat_family {
-                    continue;
-                }
-                let is_excluded = exclude_keywords.iter().any(|kw| id.contains(kw));
-                if is_excluded {
-                    continue;
-                }
-                if id.ends_with("-chat-latest") {
-                    continue;
-                }
-                models.push(ModelInfo {
-                    id: id.to_string(),
-                    name: id.to_string(),
-                });
+                if !is_chat_family { continue; }
+                if exclude_keywords.iter().any(|kw| id.contains(kw)) { continue; }
+                if id.ends_with("-chat-latest") { continue; }
+                models.push(ModelInfo { id: id.to_string(), name: id.to_string() });
             }
         }
     }
@@ -560,6 +539,309 @@ async fn fetch_models(api_key: String) -> Result<Vec<ModelInfo>, String> {
     Ok(models)
 }
 
+fn get_anthropic_models() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo { id: "claude-opus-4-20250514".into(), name: "Claude Opus 4".into() },
+        ModelInfo { id: "claude-sonnet-4-5-20250929".into(), name: "Claude Sonnet 4.5".into() },
+        ModelInfo { id: "claude-sonnet-4-20250514".into(), name: "Claude Sonnet 4".into() },
+        ModelInfo { id: "claude-haiku-4-5-20251001".into(), name: "Claude Haiku 4.5".into() },
+        ModelInfo { id: "claude-3-5-sonnet-20241022".into(), name: "Claude 3.5 Sonnet".into() },
+        ModelInfo { id: "claude-3-5-haiku-20241022".into(), name: "Claude 3.5 Haiku".into() },
+    ]
+}
+
+async fn fetch_gemini_models(api_key: String) -> Result<Vec<ModelInfo>, String> {
+    if api_key.is_empty() {
+        return Err("Gemini API key not set".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models?key={}",
+        api_key
+    );
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Gemini API error: {}", response.status()));
+    }
+
+    let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let mut models: Vec<ModelInfo> = Vec::new();
+
+    if let Some(data) = body["models"].as_array() {
+        for model in data {
+            let name = model["name"].as_str().unwrap_or("");
+            let display = model["displayName"].as_str().unwrap_or(name);
+            // Only include models that support generateContent
+            let methods = model["supportedGenerationMethods"].as_array();
+            let supports_generate = methods
+                .map(|m| m.iter().any(|v| v.as_str() == Some("generateContent")))
+                .unwrap_or(false);
+            if !supports_generate { continue; }
+            // Strip "models/" prefix
+            let id = name.strip_prefix("models/").unwrap_or(name);
+            if id.is_empty() { continue; }
+            models.push(ModelInfo { id: id.to_string(), name: display.to_string() });
+        }
+    }
+
+    // Sort: gemini-2.x first, then 1.5, then rest
+    models.sort_by(|a, b| {
+        fn rank(id: &str) -> u8 {
+            if id.contains("2.5") { return 0; }
+            if id.contains("2.0") { return 1; }
+            if id.contains("1.5-pro") { return 2; }
+            if id.contains("1.5") { return 3; }
+            10
+        }
+        rank(&a.id).cmp(&rank(&b.id))
+    });
+    Ok(models)
+}
+
+async fn fetch_azure_openai_models(api_key: String, endpoint: String) -> Result<Vec<ModelInfo>, String> {
+    if api_key.is_empty() || endpoint.is_empty() {
+        return Err("Azure OpenAI API key and endpoint are required".to_string());
+    }
+
+    let base = endpoint.trim_end_matches('/');
+    let url = format!("{}/openai/deployments?api-version=2024-10-21", base);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("api-key", &api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Azure API error: {}", response.status()));
+    }
+
+    let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let mut models: Vec<ModelInfo> = Vec::new();
+
+    if let Some(data) = body["data"].as_array() {
+        for deployment in data {
+            let id = deployment["id"].as_str().unwrap_or("");
+            let model_name = deployment["model"].as_str().unwrap_or(id);
+            if id.is_empty() { continue; }
+            models.push(ModelInfo {
+                id: id.to_string(),
+                name: format!("{} ({})", id, model_name),
+            });
+        }
+    }
+
+    if models.is_empty() {
+        return Err("No deployments found. Make sure you have models deployed in Azure.".to_string());
+    }
+
+    Ok(models)
+}
+
+#[tauri::command]
+async fn fetch_provider_models(
+    provider: String,
+    api_key: String,
+    endpoint: String,
+) -> Result<Vec<ModelInfo>, String> {
+    match provider.as_str() {
+        "openai" => fetch_openai_models(api_key).await,
+        "anthropic" => Ok(get_anthropic_models()),
+        "gemini" => fetch_gemini_models(api_key).await,
+        "azure" => fetch_azure_openai_models(api_key, endpoint).await,
+        _ => Err(format!("Unknown provider: {}", provider)),
+    }
+}
+
+// --- Generate Commit Message ---
+#[tauri::command]
+async fn generate_commit_message(
+    repo_path: String,
+    include_unstaged: bool,
+    settings: Settings,
+) -> Result<String, String> {
+    // Gather the diff
+    let staged_diff = run_git(&repo_path, &["diff", "--staged"]).unwrap_or_default();
+    let unstaged_diff = if include_unstaged {
+        run_git(&repo_path, &["diff"]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // Also get untracked file names if including unstaged
+    let untracked = if include_unstaged {
+        run_git(&repo_path, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let mut diff_context = String::new();
+    if !staged_diff.trim().is_empty() {
+        diff_context.push_str("=== Staged Changes ===\n");
+        diff_context.push_str(&staged_diff);
+        diff_context.push('\n');
+    }
+    if !unstaged_diff.trim().is_empty() {
+        diff_context.push_str("=== Unstaged Changes ===\n");
+        diff_context.push_str(&unstaged_diff);
+        diff_context.push('\n');
+    }
+    if !untracked.trim().is_empty() {
+        diff_context.push_str("=== New Untracked Files ===\n");
+        diff_context.push_str(&untracked);
+        diff_context.push('\n');
+    }
+
+    if diff_context.trim().is_empty() {
+        return Err("No changes to generate a commit message for.".to_string());
+    }
+
+    // Truncate very large diffs to avoid token limits
+    let max_len = 12000;
+    if diff_context.len() > max_len {
+        diff_context.truncate(max_len);
+        diff_context.push_str("\n... (diff truncated)");
+    }
+
+    let prompt = format!(
+        "Based on the following git diff, write a concise commit message. \
+         Use conventional commit format (e.g. feat:, fix:, refactor:, docs:, chore:). \
+         First line should be under 72 characters. Add a blank line then a brief body if needed. \
+         Output ONLY the commit message, nothing else.\n\n{}",
+        diff_context
+    );
+
+    // Make a non-streaming LLM call based on provider
+    let client = reqwest::Client::new();
+
+    match settings.provider.as_str() {
+        "anthropic" => {
+            let api_key = if !settings.anthropic_api_key.is_empty() {
+                settings.anthropic_api_key.clone()
+            } else {
+                std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+            };
+            if api_key.is_empty() {
+                return Err("Anthropic API key not set.".to_string());
+            }
+            let model = if settings.model.is_empty() { "claude-sonnet-4-5-20250929".to_string() } else { settings.model.clone() };
+            let body = serde_json::json!({
+                "model": model,
+                "max_tokens": 256,
+                "messages": [{"role": "user", "content": prompt}]
+            });
+            let resp = client.post("https://api.anthropic.com/v1/messages")
+                .header("Content-Type", "application/json")
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                let err = resp.text().await.unwrap_or_default();
+                return Err(format!("Anthropic API error: {}", err));
+            }
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            Ok(json["content"][0]["text"].as_str().unwrap_or("").trim().to_string())
+        }
+        "gemini" => {
+            let api_key = if !settings.gemini_api_key.is_empty() {
+                settings.gemini_api_key.clone()
+            } else {
+                std::env::var("GEMINI_API_KEY").unwrap_or_default()
+            };
+            if api_key.is_empty() {
+                return Err("Gemini API key not set.".to_string());
+            }
+            let model = if settings.model.is_empty() { "gemini-2.0-flash".to_string() } else { settings.model.clone() };
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                model, api_key
+            );
+            let body = serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"maxOutputTokens": 256}
+            });
+            let resp = client.post(&url)
+                .header("Content-Type", "application/json")
+                .json(&body).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                let err = resp.text().await.unwrap_or_default();
+                return Err(format!("Gemini API error: {}", err));
+            }
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            Ok(json["candidates"][0]["content"]["parts"][0]["text"].as_str().unwrap_or("").trim().to_string())
+        }
+        "azure" => {
+            let api_key = if !settings.azure_openai_api_key.is_empty() {
+                settings.azure_openai_api_key.clone()
+            } else {
+                std::env::var("AZURE_OPENAI_API_KEY").unwrap_or_default()
+            };
+            let endpoint = if !settings.azure_openai_endpoint.is_empty() {
+                settings.azure_openai_endpoint.clone()
+            } else {
+                std::env::var("AZURE_OPENAI_ENDPOINT").unwrap_or_default()
+            };
+            if api_key.is_empty() || endpoint.is_empty() {
+                return Err("Azure OpenAI API key and endpoint not set.".to_string());
+            }
+            let deployment = if settings.model.is_empty() { "gpt-4o".to_string() } else { settings.model.clone() };
+            let base = endpoint.trim_end_matches('/');
+            let url = format!("{}/openai/deployments/{}/chat/completions?api-version=2024-10-21", base, deployment);
+            let body = serde_json::json!({
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant that writes git commit messages."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 256
+            });
+            let resp = client.post(&url)
+                .header("Content-Type", "application/json")
+                .header("api-key", &api_key)
+                .json(&body).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                let err = resp.text().await.unwrap_or_default();
+                return Err(format!("Azure API error: {}", err));
+            }
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            Ok(json["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string())
+        }
+        _ => {
+            // OpenAI (default)
+            let api_key = if !settings.openai_api_key.is_empty() {
+                settings.openai_api_key.clone()
+            } else {
+                std::env::var("OPENAI_API_KEY").unwrap_or_default()
+            };
+            if api_key.is_empty() {
+                return Err("OpenAI API key not set.".to_string());
+            }
+            let model = if settings.model.is_empty() { "gpt-4o".to_string() } else { settings.model.clone() };
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant that writes git commit messages."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 256
+            });
+            let resp = client.post("https://api.openai.com/v1/chat/completions")
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&body).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                let err = resp.text().await.unwrap_or_default();
+                return Err(format!("OpenAI API error: {}", err));
+            }
+            let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            Ok(json["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string())
+        }
+    }
+}
+
 // --- LLM Streaming (direct API, kept as fallback) ---
 #[tauri::command]
 async fn send_message(app: tauri::AppHandle, request: StreamRequest) -> Result<(), String> {
@@ -570,6 +852,7 @@ async fn send_message(app: tauri::AppHandle, request: StreamRequest) -> Result<(
         "openai" => llm::stream_openai(app, messages, &settings).await,
         "anthropic" => llm::stream_anthropic(app, messages, &settings).await,
         "gemini" => llm::stream_gemini(app, messages, &settings).await,
+        "azure" => llm::stream_azure_openai(app, messages, &settings).await,
         _ => Err(format!("Unknown provider: {}", settings.provider)),
     }
 }
@@ -608,7 +891,7 @@ fn main() {
             cancel_opencode,
             send_message,
             cancel_stream,
-            fetch_models,
+            fetch_provider_models,
             git_status,
             git_stage_file,
             git_unstage_file,
@@ -617,6 +900,7 @@ fn main() {
             git_unstage_all,
             git_commit,
             git_diff,
+            generate_commit_message,
             git_list_branches,
             git_create_branch,
             git_switch_branch,

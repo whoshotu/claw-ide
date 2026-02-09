@@ -1757,6 +1757,46 @@ body {
   accent-color: var(--accent-blue);
 }
 
+.commit-message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.commit-message-header label {
+  margin: 0;
+}
+
+.btn-generate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: var(--font);
+  color: var(--accent-purple);
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-generate:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.2);
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+.btn-generate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-generate .spinner-icon {
+  animation: spin 1s linear infinite;
+}
+
 .commit-message {
   padding: 8px 12px;
   background: var(--bg-primary);
@@ -1985,6 +2025,12 @@ body {
   background-repeat: no-repeat;
   background-position: right 12px center;
   padding-right: 32px;
+}
+
+.setting-error {
+  font-size: 11px;
+  color: var(--accent-red);
+  margin-top: 4px;
 }
 
 .dir-input-row {

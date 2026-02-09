@@ -16,6 +16,10 @@ pub struct Settings {
     #[serde(default)]
     pub gemini_api_key: String,
     #[serde(default)]
+    pub azure_openai_api_key: String,
+    #[serde(default)]
+    pub azure_openai_endpoint: String,
+    #[serde(default)]
     pub effort: String,
 }
 
@@ -27,6 +31,8 @@ impl Default for Settings {
             openai_api_key: String::new(),
             anthropic_api_key: String::new(),
             gemini_api_key: String::new(),
+            azure_openai_api_key: String::new(),
+            azure_openai_endpoint: String::new(),
             effort: "high".to_string(),
         }
     }
@@ -56,7 +62,7 @@ pub struct Session {
 
 fn data_dir() -> PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("codex-app")
+    base.join("opencodex-app")
 }
 
 fn settings_file() -> PathBuf {
@@ -104,6 +110,12 @@ pub fn load_settings() -> Settings {
     }
     if let Ok(key) = std::env::var("GEMINI_API_KEY") {
         settings.gemini_api_key = key;
+    }
+    if let Ok(key) = std::env::var("AZURE_OPENAI_API_KEY") {
+        settings.azure_openai_api_key = key;
+    }
+    if let Ok(endpoint) = std::env::var("AZURE_OPENAI_ENDPOINT") {
+        settings.azure_openai_endpoint = endpoint;
     }
     settings
 }

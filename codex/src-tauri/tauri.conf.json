@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/tauri-config/main/schema.json",
-  "productName": "Codex",
+  "productName": "OpenCodex",
   "version": "1.0.0",
-  "identifier": "com.codex.app",
+  "identifier": "com.opencodex.app",
   "build": {
     "frontendDist": "../dist",
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Codex",
+        "title": "OpenCodex",
         "width": 1400,
         "height": 900,
         "minWidth": 900,

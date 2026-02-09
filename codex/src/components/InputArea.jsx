@@ -12,6 +12,7 @@ export default function InputArea({
   onModelChange,
   onEffortChange,
   hasProject,
+  hasApiKey = true,
   commands = [],
 }) {
   const [text, setText] = useState("");
@@ -74,7 +75,7 @@ export default function InputArea({
       onCancel();
       return;
     }
-    if (!text.trim() || !hasProject) return;
+    if (!text.trim() || !hasProject || !hasApiKey) return;
     onSend(text);
     setText("");
     setShowCommandHints(false);
@@ -111,12 +112,12 @@ export default function InputArea({
           <textarea
             ref={textareaRef}
             className="message-input"
-            placeholder={hasProject ? "Ask anything... (type / for commands)" : "Select a project first..."}
+            placeholder={!hasProject ? "Select a project first..." : !hasApiKey ? "Configure API key in Settings to start..." : "Ask anything... (type / for commands)"}
             rows="1"
             value={text}
             onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={!hasProject}
+            disabled={!hasProject || !hasApiKey}
           />
           <button
             className={`send-btn ${text.trim() || isStreaming ? "active" : ""} ${isStreaming ? "streaming" : ""}`}

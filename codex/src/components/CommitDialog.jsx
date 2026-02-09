@@ -1,9 +1,10 @@
 import { useState } from "react";
 
-export default function CommitDialog({ gitStatus, onCommit, onClose }) {
+export default function CommitDialog({ gitStatus, onCommit, onClose, onGenerateMessage }) {
   const [message, setMessage] = useState("");
   const [includeUnstaged, setIncludeUnstaged] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
 
   const branch = gitStatus?.branch || "unknown";
@@ -29,6 +30,18 @@ export default function CommitDialog({ gitStatus, onCommit, onClose }) {
       setError(String(e));
       setSubmitting(false);
     }
+  }
+
+  async function handleGenerate() {
+    setError("");
+    setGenerating(true);
+    try {
+      const msg = await onGenerateMessage(includeUnstaged);
+      if (msg) setMessage(msg);
+    } catch (e) {
+      setError(String(e));
+    }
+    setGenerating(false);
   }
 
   return (
@@ -64,7 +77,31 @@ export default function CommitDialog({ gitStatus, onCommit, onClose }) {
             <span>Include unstaged changes</span>
           </label>
           <div className="setting-group">
-            <label>Commit message</label>
+            <div className="commit-message-header">
+              <label>Commit message</label>
+              <button
+                className="btn-generate"
+                onClick={handleGenerate}
+                disabled={generating || submitting || fileCount === 0}
+                title="Generate commit message from diff using AI"
+              >
+                {generating ? (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 12 12" className="spinner-icon">
+                      <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeDasharray="16 10" />
+                    </svg>
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M6 1v2M6 9v2M1 6h2M9 6h2M2.5 2.5l1.4 1.4M8.1 8.1l1.4 1.4M9.5 2.5L8.1 3.9M3.9 8.1L2.5 9.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    </svg>
+                    Generate
+                  </>
+                )}
+              </button>
+            </div>
             <textarea
               className="commit-message"
               rows="3"
@@ -78,14 +115,14 @@ export default function CommitDialog({ gitStatus, onCommit, onClose }) {
             <button
               className="btn-secondary"
               onClick={() => handleCommit(false)}
-              disabled={submitting}
+              disabled={submitting || generating}
             >
               {submitting ? "Committing..." : "Commit"}
             </button>
             <button
               className="btn-primary"
               onClick={() => handleCommit(true)}
-              disabled={submitting}
+              disabled={submitting || generating}
             >
               {submitting ? "Committing..." : "Commit and push"}
             </button>

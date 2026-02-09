@@ -91,17 +91,15 @@ pub fn check_opencode() -> Result<String, String> {
     }
 }
 
-/// Ensure a .opencode.json config exists in the project directory
+/// Write .opencode.json config in the project directory (always synced with current settings)
 fn ensure_opencode_config(project_dir: &str, settings: &Settings) {
     let config_path = std::path::Path::new(project_dir).join(".opencode.json");
-    if config_path.exists() {
-        return;
-    }
 
     // Determine provider and model for opencode config
     let (provider_name, api_key) = match settings.provider.as_str() {
         "anthropic" => ("anthropic", &settings.anthropic_api_key),
         "gemini" => ("gemini", &settings.gemini_api_key),
+        "azure" => ("openai", &settings.azure_openai_api_key), // Azure uses OpenAI-compatible format in opencode
         _ => ("openai", &settings.openai_api_key),
     };
 
@@ -172,6 +170,12 @@ pub async fn run_opencode(
     }
     if !settings.gemini_api_key.is_empty() {
         cmd.env("GEMINI_API_KEY", &settings.gemini_api_key);
+    }
+    if !settings.azure_openai_api_key.is_empty() {
+        cmd.env("AZURE_OPENAI_API_KEY", &settings.azure_openai_api_key);
+    }
+    if !settings.azure_openai_endpoint.is_empty() {
+        cmd.env("AZURE_OPENAI_ENDPOINT", &settings.azure_openai_endpoint);
     }
 
     // Inherit PATH so opencode can find tools

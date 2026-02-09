@@ -291,6 +291,134 @@ pub async fn stream_anthropic(
     Ok(())
 }
 
+// --- Azure OpenAI Streaming ---
+pub async fn stream_azure_openai(
+    app: tauri::AppHandle,
+    messages: Vec<ChatMessage>,
+    settings: &Settings,
+) -> Result<(), String> {
+    let api_key = if !settings.azure_openai_api_key.is_empty() {
+        settings.azure_openai_api_key.clone()
+    } else {
+        std::env::var("AZURE_OPENAI_API_KEY").unwrap_or_default()
+    };
+
+    let endpoint = if !settings.azure_openai_endpoint.is_empty() {
+        settings.azure_openai_endpoint.clone()
+    } else {
+        std::env::var("AZURE_OPENAI_ENDPOINT").unwrap_or_default()
+    };
+
+    if api_key.is_empty() || endpoint.is_empty() {
+        let _ = app.emit("stream-error", StreamError {
+            error: "Azure OpenAI API key and endpoint not set. Go to Settings to configure.".to_string(),
+        });
+        return Ok(());
+    }
+
+    let mut chat_messages: Vec<serde_json::Value> = Vec::new();
+    let has_system = messages.iter().any(|m| m.role == "system");
+    if !has_system {
+        chat_messages.push(serde_json::json!({
+            "role": "system",
+            "content": "You are a helpful AI coding assistant. You help developers write, debug, and understand code. Be concise and precise in your responses. Use markdown formatting for code blocks."
+        }));
+    }
+    for msg in &messages {
+        chat_messages.push(serde_json::json!({
+            "role": msg.role,
+            "content": msg.content
+        }));
+    }
+
+    let deployment = if settings.model.is_empty() {
+        "gpt-4o".to_string()
+    } else {
+        settings.model.clone()
+    };
+
+    let base = endpoint.trim_end_matches('/');
+    let url = format!(
+        "{}/openai/deployments/{}/chat/completions?api-version=2024-10-21",
+        base, deployment
+    );
+
+    let body = serde_json::json!({
+        "stream": true,
+        "messages": chat_messages
+    });
+
+    let client = Client::new();
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("api-key", &api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        let _ = app.emit("stream-error", StreamError {
+            error: format!("Azure OpenAI API error ({}): {}", status, error_text),
+        });
+        return Ok(());
+    }
+
+    let state = app.state::<StreamState>();
+    {
+        let mut cancel = state.cancel.lock().await;
+        *cancel = false;
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+    let mut full_text = String::new();
+
+    while let Some(chunk) = stream.next().await {
+        {
+            let cancel = state.cancel.lock().await;
+            if *cancel { break; }
+        }
+
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        let lines: Vec<&str> = buffer.split('\n').collect();
+        let last = lines.last().cloned().unwrap_or("");
+        let complete_lines = &lines[..lines.len() - 1];
+
+        for line in complete_lines {
+            let line = line.trim();
+            if let Some(data) = line.strip_prefix("data: ") {
+                let data = data.trim();
+                if data == "[DONE]" { continue; }
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                    if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
+                        full_text.push_str(delta);
+                        let _ = app.emit("stream-response", StreamChunk {
+                            text: delta.to_string(),
+                            full_text: full_text.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        buffer = last.to_string();
+    }
+
+    let _ = app.emit("stream-done", StreamDone {
+        full_text,
+        input_tokens: 0,
+        output_tokens: 0,
+    });
+
+    Ok(())
+}
+
 // --- Gemini Streaming ---
 pub async fn stream_gemini(
     app: tauri::AppHandle,

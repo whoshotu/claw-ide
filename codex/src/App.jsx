@@ -36,6 +36,8 @@ export default function App() {
     openaiApiKey: "",
     anthropicApiKey: "",
     geminiApiKey: "",
+    azureOpenaiApiKey: "",
+    azureOpenaiEndpoint: "",
     effort: "high",
   });
   const [models, setModels] = useState([]);
@@ -83,12 +85,19 @@ export default function App() {
     checkOpenCode();
   }, []);
 
-  // Fetch models when API key changes
+  // Fetch models when provider or relevant API key changes
   useEffect(() => {
-    if (settings.openaiApiKey) {
-      fetchModels(settings.openaiApiKey);
+    const keyMap = {
+      openai: settings.openaiApiKey,
+      anthropic: settings.anthropicApiKey,
+      gemini: settings.geminiApiKey,
+      azure: settings.azureOpenaiApiKey,
+    };
+    const key = keyMap[settings.provider] || "";
+    if (key || settings.provider === "anthropic") {
+      fetchProviderModels(settings.provider, key, settings.azureOpenaiEndpoint || "");
     }
-  }, [settings.openaiApiKey]);
+  }, [settings.provider, settings.openaiApiKey, settings.anthropicApiKey, settings.geminiApiKey, settings.azureOpenaiApiKey, settings.azureOpenaiEndpoint]);
 
   // Load threads when active project changes
   useEffect(() => {
@@ -135,10 +144,14 @@ export default function App() {
     }
   }
 
-  async function fetchModels(apiKey) {
+  async function fetchProviderModels(provider, apiKey, endpoint) {
     setModelsLoading(true);
     try {
-      const result = await invoke("fetch_models", { apiKey: apiKey || "" });
+      const result = await invoke("fetch_provider_models", {
+        provider: provider || "openai",
+        apiKey: apiKey || "",
+        endpoint: endpoint || "",
+      });
       if (result && result.length > 0) {
         setModels(result);
       }
@@ -816,6 +829,17 @@ export default function App() {
     await refreshGitStatus(activeProject.directory);
   }
 
+  async function generateCommitMessage(includeUnstaged) {
+    if (!activeProject?.directory) {
+      throw new Error("No active project selected.");
+    }
+    return await invoke("generate_commit_message", {
+      repoPath: activeProject.directory,
+      includeUnstaged,
+      settings,
+    });
+  }
+
   function openDiffModal(filePath) {
     if (!gitStatus || !activeProject?.directory) return;
     const hasStaged = (gitStatus.staged || []).some((f) => f.path === filePath);
@@ -900,6 +924,19 @@ export default function App() {
   }
 
   const hasMessages = messages.length > 0 || isStreaming;
+
+  // Check if the current provider has an API key configured (or opencode is available)
+  const hasApiKey = (() => {
+    if (opencodeAvailable) return true;
+    switch (settings.provider) {
+      case "openai": return !!settings.openaiApiKey;
+      case "anthropic": return !!settings.anthropicApiKey;
+      case "gemini": return !!settings.geminiApiKey;
+      case "azure": return !!(settings.azureOpenaiApiKey && settings.azureOpenaiEndpoint);
+      default: return false;
+    }
+  })();
+
   const gitSummary = gitStatus
     ? {
         isRepo: gitStatus.isRepo,
@@ -978,6 +1015,7 @@ export default function App() {
           onModelChange={(m) => setSettings((s) => ({ ...s, model: m }))}
           onEffortChange={(e) => setSettings((s) => ({ ...s, effort: e }))}
           hasProject={!!activeProjectId}
+          hasApiKey={hasApiKey}
           commands={COMMANDS}
         />
         <TerminalPanel
@@ -1034,6 +1072,7 @@ export default function App() {
           gitStatus={gitStatus}
           onCommit={handleCommit}
           onClose={() => setShowCommitDialog(false)}
+          onGenerateMessage={generateCommitMessage}
         />
       )}
       {showSettings && (
