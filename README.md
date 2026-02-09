@@ -4,9 +4,15 @@ A desktop GUI for AI-powered coding, built with Tauri 2 + React. Wraps the [open
 
 Supports **OpenAI** (GPT-4.1, GPT-5.x, o-series), **Anthropic** (Claude), **Gemini**, and **Azure OpenAI**.
 
+## Download
+
+| Platform | Architecture | Link |
+|----------|-------------|------|
+| macOS | Apple Silicon (arm64) | [OpenCodex_1.0.0_aarch64.dmg](releases/OpenCodex_1.0.0_aarch64.dmg) |
+
 ## Quick Start (macOS)
 
-Download `OpenCodex_1.0.0_aarch64.dmg` from the `releases/` folder, open it, and drag **OpenCodex** to Applications.
+Download the `.dmg` from the table above, open it, and drag **OpenCodex** to Applications.
 
 > On first launch macOS may block it. Go to **System Settings > Privacy & Security** and click **Open Anyway**.
 
