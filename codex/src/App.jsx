@@ -196,6 +196,19 @@ export default function App() {
 
   // Load threads when active project changes
   useEffect(() => {
+    // Preserve streaming state for the thread we're leaving so background
+    // events keep accumulating and the results are available when switching back.
+    const oldId = activeThreadIdRef.current;
+    if (oldId && isStreaming) {
+      threadStreamsRef.current[oldId] = {
+        text: streamingTextRef.current,
+        model: streamingModelRef.current,
+        activity: [],
+        isStreaming: true,
+        compacting: compactingRef.current,
+      };
+    }
+
     if (activeProjectId) {
       loadThreads(activeProjectId);
       const proj = projects.find((p) => p.id === activeProjectId);
@@ -210,6 +223,9 @@ export default function App() {
     setStreamingText("");
     setStreamingActivity([]);
     setIsStreaming(false);
+    streamingTextRef.current = "";
+    streamingModelRef.current = "";
+    compactingRef.current = false;
   }, [activeProjectId]);
 
   useEffect(() => {
