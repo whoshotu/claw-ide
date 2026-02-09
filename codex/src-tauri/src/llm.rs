@@ -7,6 +7,28 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
+fn openai_supports_reasoning_effort(model: &str) -> bool {
+    model.starts_with("gpt-5") || model.starts_with('o') || model.starts_with("codex-")
+}
+
+fn openai_supports_verbosity(model: &str) -> bool {
+    model.starts_with("gpt-5")
+}
+
+fn normalize_reasoning_effort(effort: &str) -> Option<&'static str> {
+    match effort {
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => Some(effort),
+        _ => None,
+    }
+}
+
+fn normalize_verbosity(verbosity: &str) -> Option<&'static str> {
+    match verbosity {
+        "low" | "medium" | "high" => Some(verbosity),
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 pub struct StreamState {
     cancel: Arc<Mutex<bool>>,
@@ -77,11 +99,23 @@ pub async fn stream_openai(
         settings.model.clone()
     };
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "stream": true,
         "messages": chat_messages
     });
+
+    // OpenAI-only knobs, best-effort. Models that don't support them may error.
+    if openai_supports_reasoning_effort(&model) {
+        if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str()) {
+            body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
+        }
+    }
+    if openai_supports_verbosity(&model) {
+        if let Some(v) = normalize_verbosity(settings.verbosity.as_str()) {
+            body["verbosity"] = serde_json::Value::String(v.to_string());
+        }
+    }
 
     let client = Client::new();
     let response = client

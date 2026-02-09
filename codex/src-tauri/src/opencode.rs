@@ -113,6 +113,30 @@ fn ensure_opencode_config(project_dir: &str, settings: &Settings) {
         &settings.model
     };
 
+    let reasoning_effort = match settings.effort.as_str() {
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => Some(settings.effort.as_str()),
+        _ => None,
+    };
+
+    let mut coder_agent = serde_json::json!({
+        "model": model,
+        "maxTokens": 8192
+    });
+    let mut task_agent = serde_json::json!({
+        "model": model,
+        "maxTokens": 4096
+    });
+    let mut title_agent = serde_json::json!({
+        "model": model,
+        "maxTokens": 80
+    });
+
+    if let Some(effort) = reasoning_effort {
+        coder_agent["reasoningEffort"] = serde_json::Value::String(effort.to_string());
+        task_agent["reasoningEffort"] = serde_json::Value::String(effort.to_string());
+        title_agent["reasoningEffort"] = serde_json::Value::String(effort.to_string());
+    }
+
     let config = serde_json::json!({
         "providers": {
             provider_name: {
@@ -121,18 +145,9 @@ fn ensure_opencode_config(project_dir: &str, settings: &Settings) {
             }
         },
         "agents": {
-            "coder": {
-                "model": model,
-                "maxTokens": 8192
-            },
-            "task": {
-                "model": model,
-                "maxTokens": 4096
-            },
-            "title": {
-                "model": model,
-                "maxTokens": 80
-            }
+            "coder": coder_agent,
+            "task": task_agent,
+            "title": title_agent
         }
     });
 

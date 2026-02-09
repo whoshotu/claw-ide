@@ -14,9 +14,12 @@ import CommitDialog from "./components/CommitDialog";
 
 
 const EFFORTS = [
+  { id: "none", name: "None" },
+  { id: "minimal", name: "Minimal" },
   { id: "low", name: "Low" },
   { id: "medium", name: "Medium" },
   { id: "high", name: "High" },
+  { id: "xhigh", name: "XHigh" },
 ];
 
 const COMMANDS = [
@@ -39,6 +42,7 @@ export default function App() {
     azureOpenaiApiKey: "",
     azureOpenaiEndpoint: "",
     effort: "high",
+    verbosity: "medium",
   });
   const [models, setModels] = useState([]);
   const [modelsLoading, setModelsLoading] = useState(false);

@@ -9,7 +9,11 @@ const PROVIDERS = [
 ];
 
 export default function SettingsDialog({ settings, models, onSave, onClose }) {
-  const [form, setForm] = useState({ ...settings });
+  const [form, setForm] = useState({
+    ...settings,
+    effort: settings.effort || "high",
+    verbosity: settings.verbosity || "medium",
+  });
   const [localModels, setLocalModels] = useState(models);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchError, setFetchError] = useState("");
@@ -194,16 +198,33 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
           </div>
 
           <div className="setting-group">
-            <label>Effort</label>
+            <label>Reasoning Effort</label>
             <select
               value={form.effort}
               onChange={(e) => setForm((f) => ({ ...f, effort: e.target.value }))}
             >
+              <option value="none">None</option>
+              <option value="minimal">Minimal</option>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+              <option value="xhigh">XHigh</option>
             </select>
           </div>
+
+          {form.provider === "openai" && (
+            <div className="setting-group">
+              <label>Verbosity (GPT-5 only)</label>
+              <select
+                value={form.verbosity}
+                onChange={(e) => setForm((f) => ({ ...f, verbosity: e.target.value }))}
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+          )}
 
           <button className="btn-primary" onClick={handleSave}>
             Save Settings

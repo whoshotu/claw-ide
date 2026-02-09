@@ -4,6 +4,14 @@ use std::path::PathBuf;
 
 use crate::ChatMessage;
 
+fn default_effort() -> String {
+    "high".to_string()
+}
+
+fn default_verbosity() -> String {
+    "medium".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -19,8 +27,10 @@ pub struct Settings {
     pub azure_openai_api_key: String,
     #[serde(default)]
     pub azure_openai_endpoint: String,
-    #[serde(default)]
+    #[serde(default = "default_effort")]
     pub effort: String,
+    #[serde(default = "default_verbosity")]
+    pub verbosity: String,
 }
 
 impl Default for Settings {
@@ -33,7 +43,8 @@ impl Default for Settings {
             gemini_api_key: String::new(),
             azure_openai_api_key: String::new(),
             azure_openai_endpoint: String::new(),
-            effort: "high".to_string(),
+            effort: default_effort(),
+            verbosity: default_verbosity(),
         }
     }
 }
