@@ -8,7 +8,12 @@ mod terminal;
 
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use storage::{Project, Session, Settings};
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
@@ -158,12 +163,11 @@ struct GitStatus {
 }
 
 fn run_git(repo_path: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_path).args(args);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output().map_err(|e| e.to_string())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
@@ -172,12 +176,11 @@ fn run_git(repo_path: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_args(repo_path: &str, args: &[String]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_path).args(args);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output().map_err(|e| e.to_string())?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {

@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { watch } from "@tauri-apps/plugin-fs";
 import GitChangesPanel from "./GitChangesPanel";
 
-const AUTO_REFRESH_MS = 4000;
-const WATCH_DEBOUNCE_MS = 250;
+const AUTO_REFRESH_MS = 10000;
+const WATCH_DEBOUNCE_MS = 500;
 
 function sortEntries(entries) {
   return [...entries].sort((a, b) => {

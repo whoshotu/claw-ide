@@ -227,7 +227,7 @@ export default function App() {
     if (!activeProject?.directory) return;
     const interval = setInterval(() => {
       refreshGitStatus(activeProject.directory);
-    }, 5000);
+    }, 15000);
     return () => clearInterval(interval);
   }, [activeProject?.directory]);
 

@@ -6,6 +6,11 @@ use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Default)]
 pub struct OpenCodeState {
@@ -70,13 +75,23 @@ fn find_opencode_binary() -> Option<String> {
         }
     }
 
+    // Check next to the executable itself
     if let Ok(cwd) = std::env::current_dir() {
-        let local = cwd.join("opencode-src").join("opencode");
+        let binary_name = if cfg!(windows) { "opencode.exe" } else { "opencode" };
+        let local = cwd.join("opencode-src").join(binary_name);
         if local.exists() {
             return Some(local.to_string_lossy().to_string());
         }
     }
 
+    // Platform-specific candidate paths
+    #[cfg(windows)]
+    let candidates = [
+        dirs::home_dir().map(|h| h.join(".local\\bin\\opencode.exe")),
+        dirs::home_dir().map(|h| h.join("go\\bin\\opencode.exe")),
+        dirs::home_dir().map(|h| h.join("AppData\\Local\\bin\\opencode.exe")),
+    ];
+    #[cfg(not(windows))]
     let candidates = [
         dirs::home_dir().map(|h| h.join(".local/bin/opencode")),
         Some(std::path::PathBuf::from("/usr/local/bin/opencode")),
@@ -90,9 +105,24 @@ fn find_opencode_binary() -> Option<String> {
         }
     }
 
-    if let Ok(output) = std::process::Command::new("which").arg("opencode").output() {
+    // Use platform-appropriate lookup command
+    let (lookup_cmd, lookup_arg) = if cfg!(windows) {
+        ("where", "opencode")
+    } else {
+        ("which", "opencode")
+    };
+    let mut cmd = std::process::Command::new(lookup_cmd);
+    cmd.arg(lookup_arg);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(output) = cmd.output() {
         if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let path = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !path.is_empty() {
                 return Some(path);
             }
@@ -227,6 +257,8 @@ pub async fn run_opencode(
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn opencode: {}", e))?;
 
