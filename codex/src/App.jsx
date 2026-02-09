@@ -8,6 +8,10 @@ import MessagesArea from "./components/MessagesArea";
 import InputArea from "./components/InputArea";
 import StatusBar from "./components/StatusBar";
 import SettingsDialog from "./components/SettingsDialog";
+import DirectoryPanel from "./components/DirectoryPanel";
+import TerminalPanel from "./components/TerminalPanel";
+import CommitDialog from "./components/CommitDialog";
+
 
 const EFFORTS = [
   { id: "low", name: "Low" },
@@ -48,6 +52,21 @@ export default function App() {
   const [opencodeAvailable, setOpencodeAvailable] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [showDirectory, setShowDirectory] = useState(true);
+  const [directoryWidth, setDirectoryWidth] = useState(280);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalSessionId, setTerminalSessionId] = useState(null);
+  const [gitStatus, setGitStatus] = useState(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitError, setGitError] = useState("");
+  const [showCommitDialog, setShowCommitDialog] = useState(false);
+  const [diffModal, setDiffModal] = useState(null);
+  const [diffMode, setDiffMode] = useState("unstaged");
+  const [diffText, setDiffText] = useState("");
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState("");
   const streamingTextRef = useRef("");
 
   // Load settings and projects on mount
@@ -80,6 +99,25 @@ export default function App() {
     setStreamingActivity([]);
     setIsStreaming(false);
   }, [activeProjectId]);
+
+  useEffect(() => {
+    if (activeProject?.directory) {
+      refreshGitStatus(activeProject.directory);
+      setTerminalSessionId(`term-${activeProject.id}`);
+    } else {
+      setGitStatus(null);
+      setGitError("");
+      setTerminalSessionId(null);
+    }
+  }, [activeProject?.directory]);
+
+  useEffect(() => {
+    if (!activeProject?.directory) return;
+    const interval = setInterval(() => {
+      refreshGitStatus(activeProject.directory);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeProject?.directory]);
 
   async function checkOpenCode() {
     try {
@@ -497,42 +535,238 @@ export default function App() {
     }
   }
 
+  async function refreshGitStatus(dirPath) {
+    if (!dirPath) return;
+    setGitLoading(true);
+    setGitError("");
+    try {
+      const status = await invoke("git_status", { repoPath: dirPath });
+      setGitStatus(status);
+    } catch (e) {
+      setGitError(String(e));
+      setGitStatus(null);
+    } finally {
+      setGitLoading(false);
+    }
+  }
+
+  async function stageFile(repoPath, filePath) {
+    if (!repoPath || !filePath) return;
+    try {
+      await invoke("git_stage_file", { repoPath, filePath });
+      await refreshGitStatus(repoPath);
+    } catch (e) {
+      setGitError(String(e));
+    }
+  }
+
+  async function unstageFile(repoPath, filePath) {
+    if (!repoPath || !filePath) return;
+    try {
+      await invoke("git_unstage_file", { repoPath, filePath });
+      await refreshGitStatus(repoPath);
+    } catch (e) {
+      setGitError(String(e));
+    }
+  }
+
+  async function discardFile(repoPath, filePath, fileStatus) {
+    if (!repoPath || !filePath) return;
+    try {
+      const isUntracked = fileStatus === "untracked";
+      await invoke("git_discard_file", { repoPath, filePath, isUntracked });
+      await refreshGitStatus(repoPath);
+    } catch (e) {
+      setGitError(String(e));
+    }
+  }
+
+  async function stageAll(repoPath) {
+    if (!repoPath) return;
+    try {
+      await invoke("git_stage_all", { repoPath });
+      await refreshGitStatus(repoPath);
+    } catch (e) {
+      setGitError(String(e));
+    }
+  }
+
+  async function unstageAll(repoPath) {
+    if (!repoPath) return;
+    try {
+      await invoke("git_unstage_all", { repoPath });
+      await refreshGitStatus(repoPath);
+    } catch (e) {
+      setGitError(String(e));
+    }
+  }
+
+  async function handleCommit({ message, includeUnstaged, push }) {
+    if (!activeProject?.directory) {
+      throw new Error("No active project selected.");
+    }
+    if (!message) {
+      throw new Error("Commit message is required.");
+    }
+    await invoke("git_commit", {
+      repoPath: activeProject.directory,
+      message,
+      includeUnstaged,
+      push,
+    });
+    await refreshGitStatus(activeProject.directory);
+  }
+
+  function openDiffModal(filePath) {
+    if (!gitStatus || !activeProject?.directory) return;
+    const hasStaged = (gitStatus.staged || []).some((f) => f.path === filePath);
+    const hasUnstaged = (gitStatus.unstaged || []).some((f) => f.path === filePath);
+    const mode = hasUnstaged ? "unstaged" : "staged";
+    setDiffMode(mode);
+    setDiffModal({
+      path: filePath,
+      hasStaged,
+      hasUnstaged,
+    });
+  }
+
+  async function fetchDiff(mode, filePath) {
+    if (!activeProject?.directory || !filePath) return;
+    setDiffLoading(true);
+    setDiffError("");
+    try {
+      const unstagedEntry = (gitStatus?.unstaged || []).find((f) => f.path === filePath);
+      const stagedEntry = (gitStatus?.staged || []).find((f) => f.path === filePath);
+      const status =
+        mode === "staged" ? stagedEntry?.status : unstagedEntry?.status;
+      const isNew = status === "untracked";
+      const diff = await invoke("git_diff", {
+        repoPath: activeProject.directory,
+        filePath,
+        staged: mode === "staged",
+        isNew,
+      });
+      setDiffText(diff || "");
+    } catch (e) {
+      setDiffError(String(e));
+      setDiffText("");
+    } finally {
+      setDiffLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!diffModal?.path) return;
+    fetchDiff(diffMode, diffModal.path);
+  }, [diffModal?.path, diffMode, activeProject?.directory]);
+
+  function handleSidebarResize(e) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    function onMove(ev) {
+      const w = Math.min(400, Math.max(180, startW + ev.clientX - startX));
+      setSidebarWidth(w);
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function handleDirectoryResize(e) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = directoryWidth;
+    function onMove(ev) {
+      const w = Math.min(500, Math.max(200, startW + startX - ev.clientX));
+      setDirectoryWidth(w);
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   const hasMessages = messages.length > 0 || isStreaming;
+  const gitSummary = gitStatus
+    ? {
+        isRepo: gitStatus.isRepo,
+        additions:
+          (gitStatus.stagedAdditions || 0) + (gitStatus.unstagedAdditions || 0),
+        deletions:
+          (gitStatus.stagedDeletions || 0) + (gitStatus.unstagedDeletions || 0),
+        hasChanges:
+          (gitStatus.staged?.length || 0) + (gitStatus.unstaged?.length || 0) >
+          0,
+      }
+    : null;
 
   return (
     <div className="app">
-      <Sidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        threads={threads}
-        activeThreadId={activeThreadId}
-        onSelectProject={setActiveProjectId}
-        onNewProject={handleSelectProjectDir}
-        onDeleteProject={deleteProject}
-        onNewThread={newThread}
-        onSelectThread={selectThread}
-        onDeleteThread={deleteThread}
-        onOpenSettings={() => setShowSettings(true)}
-      />
+      {showSidebar && (
+        <>
+          <Sidebar
+            projects={projects}
+            activeProjectId={activeProjectId}
+            threads={threads}
+            activeThreadId={activeThreadId}
+            onSelectProject={setActiveProjectId}
+            onNewProject={handleSelectProjectDir}
+            onDeleteProject={deleteProject}
+            onNewThread={newThread}
+            onSelectThread={selectThread}
+            onDeleteThread={deleteThread}
+            onOpenSettings={() => setShowSettings(true)}
+            style={{ width: sidebarWidth, minWidth: sidebarWidth }}
+          />
+          <div
+            className="resize-handle-h"
+            onPointerDown={handleSidebarResize}
+          />
+        </>
+      )}
       <main className="main-content">
         <Topbar
           onNewThread={newThread}
           activeProject={activeProject}
           hasProject={!!activeProjectId}
+          onToggleSidebar={() => setShowSidebar((prev) => !prev)}
+          isSidebarOpen={showSidebar}
+          onToggleDirectory={() => setShowDirectory((prev) => !prev)}
+          onToggleTerminal={() => setShowTerminal((prev) => !prev)}
+          isDirectoryOpen={showDirectory}
+          isTerminalOpen={showTerminal}
+          gitSummary={gitSummary}
+          onOpenCommit={() => setShowCommitDialog(true)}
         />
-        {hasMessages ? (
-          <MessagesArea
-            messages={messages}
-            isStreaming={isStreaming}
-            streamingText={streamingText}
-            streamingActivity={streamingActivity}
-          />
-        ) : (
-          <WelcomeScreen
-            activeProject={activeProject}
-            onSelectProject={handleSelectProjectDir}
-          />
-        )}
+        <div className="content-stack">
+          {hasMessages ? (
+            <MessagesArea
+              messages={messages}
+              isStreaming={isStreaming}
+              streamingText={streamingText}
+              streamingActivity={streamingActivity}
+            />
+          ) : (
+            <WelcomeScreen
+              activeProject={activeProject}
+              onSelectProject={handleSelectProjectDir}
+            />
+          )}
+        </div>
         <InputArea
           onSend={sendMessage}
           onCancel={cancelStream}
@@ -546,11 +780,58 @@ export default function App() {
           onEffortChange={(e) => setSettings((s) => ({ ...s, effort: e }))}
           hasProject={!!activeProjectId}
         />
+        <TerminalPanel
+          activeProject={activeProject}
+          sessionId={terminalSessionId}
+          isOpen={showTerminal}
+        />
         <StatusBar
           opencodeAvailable={opencodeAvailable}
           activeProject={activeProject}
         />
       </main>
+      {showDirectory && (
+        <>
+          <div
+            className="resize-handle-h"
+            onPointerDown={handleDirectoryResize}
+          />
+          <DirectoryPanel
+            activeProject={activeProject}
+            gitStatus={gitStatus}
+            gitLoading={gitLoading}
+            gitError={gitError}
+            onRefreshGit={() => refreshGitStatus(activeProject?.directory)}
+            onStageFile={(path) => stageFile(activeProject?.directory, path)}
+            onUnstageFile={(path) => unstageFile(activeProject?.directory, path)}
+            onDiscardFile={(path, status) => discardFile(activeProject?.directory, path, status)}
+            onStageAll={() => stageAll(activeProject?.directory)}
+            onUnstageAll={() => unstageAll(activeProject?.directory)}
+            onSelectFile={openDiffModal}
+            diffFile={diffModal?.path || null}
+            diffText={diffText}
+            diffLoading={diffLoading}
+            diffError={diffError}
+            diffMode={diffMode}
+            diffHasStaged={diffModal?.hasStaged || false}
+            diffHasUnstaged={diffModal?.hasUnstaged || false}
+            onDiffModeChange={(mode) => setDiffMode(mode)}
+            onCloseDiff={() => {
+              setDiffModal(null);
+              setDiffText("");
+              setDiffError("");
+            }}
+            style={{ width: directoryWidth, minWidth: directoryWidth }}
+          />
+        </>
+      )}
+      {showCommitDialog && gitStatus?.isRepo && (
+        <CommitDialog
+          gitStatus={gitStatus}
+          onCommit={handleCommit}
+          onClose={() => setShowCommitDialog(false)}
+        />
+      )}
       {showSettings && (
         <SettingsDialog
           settings={settings}

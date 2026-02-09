@@ -58,30 +58,6 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
             </div>
           </div>
           <div className="setting-group">
-            <label>Anthropic API Key</label>
-            <input
-              type="password"
-              value={form.anthropicApiKey}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, anthropicApiKey: e.target.value }))
-              }
-              placeholder="sk-ant-..."
-              autoComplete="off"
-            />
-          </div>
-          <div className="setting-group">
-            <label>Gemini API Key</label>
-            <input
-              type="password"
-              value={form.geminiApiKey}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, geminiApiKey: e.target.value }))
-              }
-              placeholder="AI..."
-              autoComplete="off"
-            />
-          </div>
-          <div className="setting-group">
             <label>Provider</label>
             <select
               value={form.provider}

@@ -4,8 +4,10 @@
 mod llm;
 mod opencode;
 mod storage;
+mod terminal;
 
 use serde::{Deserialize, Serialize};
+use std::process::Command;
 use storage::{Project, Session, Settings};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -96,6 +98,7 @@ fn write_file(file_path: String, content: String) -> Result<(), String> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct FileEntry {
     name: String,
     is_directory: bool,
@@ -123,6 +126,271 @@ fn get_cwd() -> String {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitFile {
+    path: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStatus {
+    is_repo: bool,
+    branch: String,
+    staged: Vec<GitFile>,
+    unstaged: Vec<GitFile>,
+    ahead: i32,
+    behind: i32,
+    staged_additions: i64,
+    staged_deletions: i64,
+    unstaged_additions: i64,
+    unstaged_deletions: i64,
+}
+
+fn run_git(repo_path: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+fn run_git_args(repo_path: &str, args: &[String]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+fn null_device() -> &'static str {
+    if cfg!(windows) {
+        "NUL"
+    } else {
+        "/dev/null"
+    }
+}
+
+fn parse_numstat(output: &str) -> (i64, i64) {
+    let mut additions = 0i64;
+    let mut deletions = 0i64;
+    for line in output.lines() {
+        let mut parts = line.split('\t');
+        let add = parts.next().unwrap_or("0");
+        let del = parts.next().unwrap_or("0");
+        let add_val = add.parse::<i64>().unwrap_or(0);
+        let del_val = del.parse::<i64>().unwrap_or(0);
+        additions += add_val;
+        deletions += del_val;
+    }
+    (additions, deletions)
+}
+
+fn status_to_label(status: char) -> String {
+    match status {
+        'M' => "modified",
+        'A' => "added",
+        'D' => "deleted",
+        'R' => "renamed",
+        'C' => "copied",
+        'U' => "conflict",
+        _ => "changed",
+    }
+    .to_string()
+}
+
+fn normalize_path(path: &str) -> String {
+    if let Some(idx) = path.rfind("->") {
+        return path[idx + 2..].trim().to_string();
+    }
+    path.trim().to_string()
+}
+
+#[tauri::command]
+fn git_status(repo_path: String) -> Result<GitStatus, String> {
+    let inside = run_git(&repo_path, &["rev-parse", "--is-inside-work-tree"]);
+    if inside.is_err() {
+        return Ok(GitStatus {
+            is_repo: false,
+            branch: String::new(),
+            staged: vec![],
+            unstaged: vec![],
+            ahead: 0,
+            behind: 0,
+            staged_additions: 0,
+            staged_deletions: 0,
+            unstaged_additions: 0,
+            unstaged_deletions: 0,
+        });
+    }
+
+    let branch = run_git(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "unknown".to_string())
+        .trim()
+        .to_string();
+
+    let status_output = run_git(&repo_path, &["status", "--porcelain=1", "-b"])?;
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+    let mut ahead = 0i32;
+    let mut behind = 0i32;
+
+    for line in status_output.lines() {
+        if line.starts_with("## ") {
+            if let Some(idx) = line.find('[') {
+                let meta = &line[idx + 1..line.len() - 1];
+                for part in meta.split(',') {
+                    let trimmed = part.trim();
+                    if let Some(val) = trimmed.strip_prefix("ahead ") {
+                        ahead = val.parse::<i32>().unwrap_or(0);
+                    }
+                    if let Some(val) = trimmed.strip_prefix("behind ") {
+                        behind = val.parse::<i32>().unwrap_or(0);
+                    }
+                }
+            }
+            continue;
+        }
+        if line.len() < 3 {
+            continue;
+        }
+        let mut chars = line.chars();
+        let x = chars.next().unwrap_or(' ');
+        let y = chars.next().unwrap_or(' ');
+        let path = normalize_path(line[3..].trim());
+
+        if x == '?' && y == '?' {
+            unstaged.push(GitFile {
+                path,
+                status: "untracked".to_string(),
+            });
+            continue;
+        }
+
+        if x != ' ' {
+            staged.push(GitFile {
+                path: path.clone(),
+                status: status_to_label(x),
+            });
+        }
+        if y != ' ' {
+            unstaged.push(GitFile {
+                path: path.clone(),
+                status: status_to_label(y),
+            });
+        }
+    }
+
+    let staged_numstat = run_git(&repo_path, &["diff", "--numstat", "--staged"])
+        .unwrap_or_default();
+    let unstaged_numstat = run_git(&repo_path, &["diff", "--numstat"]).unwrap_or_default();
+    let (staged_additions, staged_deletions) = parse_numstat(&staged_numstat);
+    let (unstaged_additions, unstaged_deletions) = parse_numstat(&unstaged_numstat);
+
+    Ok(GitStatus {
+        is_repo: true,
+        branch,
+        staged,
+        unstaged,
+        ahead,
+        behind,
+        staged_additions,
+        staged_deletions,
+        unstaged_additions,
+        unstaged_deletions,
+    })
+}
+
+#[tauri::command]
+fn git_stage_file(repo_path: String, file_path: String) -> Result<(), String> {
+    run_git(&repo_path, &["add", "--", &file_path]).map(|_| ())
+}
+
+#[tauri::command]
+fn git_unstage_file(repo_path: String, file_path: String) -> Result<(), String> {
+    run_git(&repo_path, &["restore", "--staged", "--", &file_path]).map(|_| ())
+}
+
+#[tauri::command]
+fn git_discard_file(repo_path: String, file_path: String, is_untracked: bool) -> Result<(), String> {
+    if is_untracked {
+        run_git(&repo_path, &["clean", "-f", "--", &file_path]).map(|_| ())
+    } else {
+        run_git(&repo_path, &["checkout", "--", &file_path]).map(|_| ())
+    }
+}
+
+#[tauri::command]
+fn git_stage_all(repo_path: String) -> Result<(), String> {
+    run_git(&repo_path, &["add", "-A"]).map(|_| ())
+}
+
+#[tauri::command]
+fn git_unstage_all(repo_path: String) -> Result<(), String> {
+    run_git(&repo_path, &["restore", "--staged", "."]).map(|_| ())
+}
+
+#[tauri::command]
+fn git_commit(
+    repo_path: String,
+    message: String,
+    include_unstaged: bool,
+    push: bool,
+) -> Result<(), String> {
+    if message.trim().is_empty() {
+        return Err("Commit message is required".to_string());
+    }
+    if include_unstaged {
+        run_git(&repo_path, &["add", "-A"])?;
+    }
+    run_git(&repo_path, &["commit", "-m", &message])?;
+    if push {
+        run_git(&repo_path, &["push"])?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn git_diff(
+    repo_path: String,
+    file_path: String,
+    staged: bool,
+    is_new: bool,
+) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["diff".into()];
+    if staged {
+        args.push("--staged".into());
+    }
+    if is_new && !staged {
+        args.push("--no-index".into());
+        args.push("--".into());
+        args.push(null_device().into());
+        args.push(file_path);
+    } else {
+        args.push("--".into());
+        args.push(file_path);
+    }
+    let output = run_git_args(&repo_path, &args)?;
+    if output.trim().is_empty() {
+        Ok("No diff available.".to_string())
+    } else {
+        Ok(output)
+    }
 }
 
 // --- OpenCode CLI ---
@@ -282,6 +550,7 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .manage(llm::StreamState::default())
         .manage(opencode::OpenCodeState::default())
+        .manage(terminal::TerminalState::default())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
@@ -303,6 +572,18 @@ fn main() {
             send_message,
             cancel_stream,
             fetch_models,
+            git_status,
+            git_stage_file,
+            git_unstage_file,
+            git_discard_file,
+            git_stage_all,
+            git_unstage_all,
+            git_commit,
+            git_diff,
+            terminal::terminal_start,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -23,6 +23,7 @@ export default function Sidebar({
   onSelectThread,
   onDeleteThread,
   onOpenSettings,
+  style,
 }) {
   const [expandedProjects, setExpandedProjects] = useState({});
 
@@ -45,7 +46,7 @@ export default function Sidebar({
     expandedProjects[id] !== undefined ? expandedProjects[id] : id === activeProjectId;
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={style}>
       <div className="sidebar-top">
         <button className="sidebar-btn primary" onClick={onNewProject}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
