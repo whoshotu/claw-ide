@@ -195,18 +195,48 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
   return (
     <div className="messages-area" ref={containerRef} onScroll={handleScroll}>
       <div className="messages-container">
-        {messages.map((msg, idx) => (
-          <div key={idx} className={`message ${msg.role}`}>
-            <div className="message-header">
-              <span className="message-role">
-                {msg.role === "user" ? "You" : "Codex"}
-              </span>
+        {messages.map((msg, idx) => {
+          if (msg.role === "compact") {
+            return (
+              <div key={idx} className="message compact">
+                <div className="compact-checkpoint">
+                  <div className="compact-divider">
+                    <span className="compact-label">
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                      </svg>
+                      Conversation compacted
+                    </span>
+                  </div>
+                  <div className="compact-summary">
+                    <MessageContent content={msg.content} />
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          if (msg.role === "system") {
+            return (
+              <div key={idx} className="message system">
+                <div className="system-message">
+                  <MessageContent content={msg.content} />
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={idx} className={`message ${msg.role}`}>
+              <div className="message-header">
+                <span className="message-role">
+                  {msg.role === "user" ? "You" : "Codex"}
+                </span>
+              </div>
+              <div className="message-content">
+                <MessageContent content={msg.content} isError={msg.isError} />
+              </div>
             </div>
-            <div className="message-content">
-              <MessageContent content={msg.content} isError={msg.isError} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {isStreaming && (hasActivity || streamingText) && (
           <div className="message assistant">
             <div className="message-header">

@@ -137,6 +137,13 @@ struct GitFile {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BranchList {
+    current: String,
+    branches: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GitStatus {
     is_repo: bool,
     branch: String,
@@ -393,6 +400,36 @@ fn git_diff(
     }
 }
 
+#[tauri::command]
+fn git_list_branches(repo_path: String) -> Result<BranchList, String> {
+    let current = run_git(&repo_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "unknown".to_string())
+        .trim()
+        .to_string();
+
+    let output = run_git(&repo_path, &["branch", "--list", "--format=%(refname:short)"])?;
+    let branches: Vec<String> = output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    Ok(BranchList { current, branches })
+}
+
+#[tauri::command]
+fn git_create_branch(repo_path: String, branch_name: String) -> Result<(), String> {
+    if branch_name.trim().is_empty() {
+        return Err("Branch name cannot be empty".to_string());
+    }
+    run_git(&repo_path, &["checkout", "-b", branch_name.trim()]).map(|_| ())
+}
+
+#[tauri::command]
+fn git_switch_branch(repo_path: String, branch_name: String) -> Result<(), String> {
+    run_git(&repo_path, &["checkout", &branch_name]).map(|_| ())
+}
+
 // --- OpenCode CLI ---
 #[tauri::command]
 fn check_opencode() -> Result<String, String> {
@@ -580,6 +617,9 @@ fn main() {
             git_unstage_all,
             git_commit,
             git_diff,
+            git_list_branches,
+            git_create_branch,
+            git_switch_branch,
             terminal::terminal_start,
             terminal::terminal_write,
             terminal::terminal_resize,

@@ -12,10 +12,12 @@ export default function InputArea({
   onModelChange,
   onEffortChange,
   hasProject,
+  commands = [],
 }) {
   const [text, setText] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showEffortDropdown, setShowEffortDropdown] = useState(false);
+  const [showCommandHints, setShowCommandHints] = useState(false);
   const textareaRef = useRef(null);
   const modelBtnRef = useRef(null);
   const effortBtnRef = useRef(null);
@@ -41,7 +43,26 @@ export default function InputArea({
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  const filteredCommands = text.startsWith("/")
+    ? commands.filter((c) => c.cmd.startsWith(text.trim().toLowerCase()))
+    : [];
+
+  function handleTextChange(value) {
+    setText(value);
+    setShowCommandHints(value.startsWith("/") && !value.includes(" "));
+  }
+
+  function handleCommandSelect(cmd) {
+    onSend(cmd);
+    setText("");
+    setShowCommandHints(false);
+  }
+
   function handleKeyDown(e) {
+    if (e.key === "Escape" && showCommandHints) {
+      setShowCommandHints(false);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -56,6 +77,7 @@ export default function InputArea({
     if (!text.trim() || !hasProject) return;
     onSend(text);
     setText("");
+    setShowCommandHints(false);
   }
 
   const modelDisplay =
@@ -66,6 +88,20 @@ export default function InputArea({
   return (
     <div className="input-area">
       <div className="input-container">
+        {showCommandHints && filteredCommands.length > 0 && (
+          <div className="command-hints">
+            {filteredCommands.map((c) => (
+              <div
+                key={c.cmd}
+                className="command-hint-item"
+                onClick={() => handleCommandSelect(c.cmd)}
+              >
+                <span className="command-hint-cmd">{c.cmd}</span>
+                <span className="command-hint-desc">{c.description}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="input-row">
           <button className="attach-btn" title="Attach file">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -75,10 +111,10 @@ export default function InputArea({
           <textarea
             ref={textareaRef}
             className="message-input"
-            placeholder={hasProject ? "Ask anything..." : "Select a project first..."}
+            placeholder={hasProject ? "Ask anything... (type / for commands)" : "Select a project first..."}
             rows="1"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={!hasProject}
           />

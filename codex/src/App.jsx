@@ -19,6 +19,12 @@ const EFFORTS = [
   { id: "high", name: "High" },
 ];
 
+const COMMANDS = [
+  { cmd: "/compact", description: "Compact conversation into a summary checkpoint" },
+  { cmd: "/clear", description: "Clear all messages in this thread" },
+  { cmd: "/help", description: "Show available commands" },
+];
+
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
@@ -68,6 +74,7 @@ export default function App() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState("");
   const streamingTextRef = useRef("");
+  const compactingRef = useRef(false);
 
   // Load settings and projects on mount
   useEffect(() => {
@@ -225,6 +232,13 @@ export default function App() {
         // Not JSON, use raw output
       }
 
+      // Handle compact mode — replace all messages with a single checkpoint
+      if (compactingRef.current) {
+        compactingRef.current = false;
+        setMessages([{ role: "compact", content, timestamp: Date.now() }]);
+        return;
+      }
+
       const assistantMsg = {
         role: "assistant",
         content,
@@ -238,6 +252,15 @@ export default function App() {
       setStreamingText("");
       setStreamingActivity([]);
       streamingTextRef.current = "";
+
+      if (compactingRef.current) {
+        compactingRef.current = false;
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", content: `Compact failed: ${event.payload.error}`, timestamp: Date.now() },
+        ]);
+        return;
+      }
 
       const errorMsg = {
         role: "assistant",
@@ -261,6 +284,13 @@ export default function App() {
       setStreamingText("");
       streamingTextRef.current = "";
 
+      // Handle compact mode
+      if (compactingRef.current) {
+        compactingRef.current = false;
+        setMessages([{ role: "compact", content: fullText, timestamp: Date.now() }]);
+        return;
+      }
+
       const assistantMsg = {
         role: "assistant",
         content: fullText,
@@ -273,6 +303,15 @@ export default function App() {
       setIsStreaming(false);
       setStreamingText("");
       streamingTextRef.current = "";
+
+      if (compactingRef.current) {
+        compactingRef.current = false;
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", content: `Compact failed: ${event.payload.error}`, timestamp: Date.now() },
+        ]);
+        return;
+      }
 
       const errorMsg = {
         role: "assistant",
@@ -424,10 +463,135 @@ export default function App() {
     }
   }
 
+  function buildHistoryPrompt(msgs, currentContent) {
+    // Find last compact checkpoint
+    const lastCompactIdx = msgs.findLastIndex((m) => m.role === "compact");
+    const relevant = lastCompactIdx >= 0 ? msgs.slice(lastCompactIdx) : msgs;
+
+    const history = relevant
+      .map((m) => {
+        if (m.role === "compact") return `[Conversation Summary]: ${m.content}`;
+        if (m.role === "system") return null;
+        return `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`;
+      })
+      .filter(Boolean)
+      .join("\n\n");
+
+    if (!history) return currentContent;
+    return `<conversation_history>\n${history}\n</conversation_history>\n\nUser: ${currentContent}`;
+  }
+
   async function sendMessage(content) {
     if (!content.trim() || isStreaming) return;
     if (!activeProjectId) return;
 
+    const trimmed = content.trim();
+
+    // --- Command handling ---
+    if (trimmed.startsWith("/")) {
+      const cmd = trimmed.split(" ")[0].toLowerCase();
+
+      if (cmd === "/clear") {
+        setMessages([]);
+        return;
+      }
+
+      if (cmd === "/help") {
+        const helpText = COMMANDS.map((c) => `**${c.cmd}** — ${c.description}`).join("\n");
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", content: `Available commands:\n${helpText}`, timestamp: Date.now() },
+        ]);
+        return;
+      }
+
+      if (cmd === "/compact") {
+        if (messages.length < 2) {
+          setMessages((prev) => [
+            ...prev,
+            { role: "system", content: "Not enough messages to compact.", timestamp: Date.now() },
+          ]);
+          return;
+        }
+
+        compactingRef.current = true;
+
+        const history = messages
+          .map((m) => {
+            if (m.role === "compact") return `[Previous Summary]: ${m.content}`;
+            if (m.role === "system") return null;
+            return `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`;
+          })
+          .filter(Boolean)
+          .join("\n\n");
+
+        const compactPrompt =
+          "Provide a concise but comprehensive summary of the following conversation. " +
+          "Focus on: key decisions made, important information shared (names, preferences, requirements), " +
+          "current state of ongoing work, and any pending tasks. Write ONLY the summary, no preamble.\n\n" +
+          history;
+
+        // Show working indicator
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", content: "Compacting conversation...", timestamp: Date.now() },
+        ]);
+        setIsStreaming(true);
+        setStreamingText("");
+        setStreamingActivity([]);
+        streamingTextRef.current = "";
+
+        let threadId = activeThreadId || generateId();
+        if (!activeThreadId) setActiveThreadId(threadId);
+
+        if (opencodeAvailable && activeProject?.directory) {
+          try {
+            await invoke("send_opencode", {
+              request: {
+                prompt: compactPrompt,
+                projectDir: activeProject.directory,
+                sessionId: threadId,
+                settings,
+              },
+            });
+          } catch (e) {
+            compactingRef.current = false;
+            setIsStreaming(false);
+            setMessages((prev) => [
+              ...prev,
+              { role: "system", content: `Compact failed: ${e}`, timestamp: Date.now() },
+            ]);
+          }
+        } else {
+          try {
+            await invoke("send_message", {
+              request: {
+                messages: [{ role: "user", content: compactPrompt }],
+                settings,
+                sessionId: threadId,
+              },
+            });
+          } catch (e) {
+            compactingRef.current = false;
+            setIsStreaming(false);
+            setMessages((prev) => [
+              ...prev,
+              { role: "system", content: `Compact failed: ${e}`, timestamp: Date.now() },
+            ]);
+          }
+        }
+        return;
+      }
+
+      // Unknown command
+      setMessages((prev) => [
+        ...prev,
+        { role: "system", content: `Unknown command: ${cmd}. Type /help for available commands.`, timestamp: Date.now() },
+      ]);
+      return;
+    }
+
+    // --- Normal message handling ---
     let threadId = activeThreadId;
     if (!threadId) {
       threadId = generateId();
@@ -436,7 +600,7 @@ export default function App() {
 
     const userMsg = {
       role: "user",
-      content: content.trim(),
+      content: trimmed,
       timestamp: Date.now(),
     };
 
@@ -450,9 +614,10 @@ export default function App() {
     // Use opencode CLI if available
     if (opencodeAvailable && activeProject?.directory) {
       try {
+        const fullPrompt = buildHistoryPrompt(messages, trimmed);
         await invoke("send_opencode", {
           request: {
-            prompt: content.trim(),
+            prompt: fullPrompt,
             projectDir: activeProject.directory,
             sessionId: threadId,
             settings,
@@ -469,11 +634,23 @@ export default function App() {
         setMessages((prev) => [...prev, errorMsg]);
       }
     } else {
-      // Fallback to direct LLM streaming
-      const apiMessages = newMessages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      // Fallback to direct LLM streaming — pass full message array for native context
+      const lastCompactIdx = newMessages.findLastIndex((m) => m.role === "compact");
+      let apiMessages;
+      if (lastCompactIdx >= 0) {
+        const compactMsg = newMessages[lastCompactIdx];
+        const afterCompact = newMessages.slice(lastCompactIdx + 1);
+        apiMessages = [
+          { role: "system", content: `Previous conversation summary:\n${compactMsg.content}` },
+          ...afterCompact
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content })),
+        ];
+      } else {
+        apiMessages = newMessages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role, content: m.content }));
+      }
       try {
         await invoke("send_message", {
           request: {
@@ -599,6 +776,28 @@ export default function App() {
     } catch (e) {
       setGitError(String(e));
     }
+  }
+
+  async function listBranches() {
+    if (!activeProject?.directory) return { current: "", branches: [] };
+    try {
+      return await invoke("git_list_branches", { repoPath: activeProject.directory });
+    } catch (e) {
+      console.error("Failed to list branches:", e);
+      return { current: "", branches: [] };
+    }
+  }
+
+  async function createBranch(branchName) {
+    if (!activeProject?.directory) return;
+    await invoke("git_create_branch", { repoPath: activeProject.directory, branchName });
+    await refreshGitStatus(activeProject.directory);
+  }
+
+  async function switchBranch(branchName) {
+    if (!activeProject?.directory) return;
+    await invoke("git_switch_branch", { repoPath: activeProject.directory, branchName });
+    await refreshGitStatus(activeProject.directory);
   }
 
   async function handleCommit({ message, includeUnstaged, push }) {
@@ -779,6 +978,7 @@ export default function App() {
           onModelChange={(m) => setSettings((s) => ({ ...s, model: m }))}
           onEffortChange={(e) => setSettings((s) => ({ ...s, effort: e }))}
           hasProject={!!activeProjectId}
+          commands={COMMANDS}
         />
         <TerminalPanel
           activeProject={activeProject}
@@ -788,6 +988,10 @@ export default function App() {
         <StatusBar
           opencodeAvailable={opencodeAvailable}
           activeProject={activeProject}
+          gitStatus={gitStatus}
+          onListBranches={listBranches}
+          onCreateBranch={createBranch}
+          onSwitchBranch={switchBranch}
         />
       </main>
       {showDirectory && (
