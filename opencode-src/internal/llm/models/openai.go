@@ -3,6 +3,11 @@ package models
 const (
 	ProviderOpenAI ModelProvider = "openai"
 
+	GPT52       ModelID = "gpt-5.2"
+	GPT52Pro    ModelID = "gpt-5.2-pro"
+	GPT51Codex    ModelID = "gpt-5.1-codex"
+	GPT51CodexMax ModelID = "gpt-5.1-codex-max"
+	GPT51CodexMini ModelID = "gpt-5.1-codex-mini"
 	GPT41        ModelID = "gpt-4.1"
 	GPT41Mini    ModelID = "gpt-4.1-mini"
 	GPT41Nano    ModelID = "gpt-4.1-nano"
@@ -18,6 +23,81 @@ const (
 )
 
 var OpenAIModels = map[ModelID]Model{
+	GPT52: {
+		ID:                  GPT52,
+		Name:                "GPT 5.2",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.2",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       512_000,
+		DefaultMaxTokens:    8192,
+		CanReason:           true,
+		SupportsAttachments: false,
+		UseResponsesAPI:     true,
+	},
+	GPT52Pro: {
+		ID:                  GPT52Pro,
+		Name:                "GPT 5.2 Pro",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.2-pro",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       512_000,
+		DefaultMaxTokens:    8192,
+		CanReason:           true,
+		SupportsAttachments: false,
+		UseResponsesAPI:     true,
+	},
+	GPT51Codex: {
+		ID:                  GPT51Codex,
+		Name:                "GPT 5.1 Codex",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.1-codex",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       200_000,
+		DefaultMaxTokens:    8192,
+		CanReason:           true,
+		SupportsAttachments: false,
+		UseResponsesAPI:     true,
+	},
+	GPT51CodexMax: {
+		ID:                  GPT51CodexMax,
+		Name:                "GPT 5.1 Codex Max",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.1-codex-max",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       200_000,
+		DefaultMaxTokens:    8192,
+		CanReason:           true,
+		SupportsAttachments: false,
+		UseResponsesAPI:     true,
+	},
+	GPT51CodexMini: {
+		ID:                  GPT51CodexMini,
+		Name:                "GPT 5.1 Codex Mini",
+		Provider:            ProviderOpenAI,
+		APIModel:            "gpt-5.1-codex-mini",
+		CostPer1MIn:         0.0,
+		CostPer1MInCached:   0.0,
+		CostPer1MOutCached:  0.0,
+		CostPer1MOut:        0.0,
+		ContextWindow:       200_000,
+		DefaultMaxTokens:    8192,
+		CanReason:           true,
+		SupportsAttachments: false,
+		UseResponsesAPI:     true,
+	},
 	GPT41: {
 		ID:                  GPT41,
 		Name:                "GPT 4.1",

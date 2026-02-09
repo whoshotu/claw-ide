@@ -28,6 +28,30 @@ const COMMANDS = [
   { cmd: "/help", description: "Show available commands" },
 ];
 
+function isOpencodeCompatibleModel(provider, model) {
+  if (!model) return false;
+  if (provider === "openai") {
+    return /^(gpt-|o[1-9]|chatgpt-)/.test(model);
+  }
+  // For now, assume other providers are compatible unless proven otherwise.
+  return true;
+}
+
+function hasProviderApiKey(settings) {
+  switch (settings.provider) {
+    case "openai":
+      return !!settings.openaiApiKey;
+    case "anthropic":
+      return !!settings.anthropicApiKey;
+    case "gemini":
+      return !!settings.geminiApiKey;
+    case "azure":
+      return !!(settings.azureOpenaiApiKey && settings.azureOpenaiEndpoint);
+    default:
+      return false;
+  }
+}
+
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
@@ -35,7 +59,7 @@ function generateId() {
 export default function App() {
   const [settings, setSettings] = useState({
     provider: "openai",
-    model: "gpt-4o",
+    model: "gpt-4.1",
     openaiApiKey: "",
     anthropicApiKey: "",
     geminiApiKey: "",
@@ -80,7 +104,11 @@ export default function App() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState("");
   const streamingTextRef = useRef("");
+  const streamingModelRef = useRef("");
   const compactingRef = useRef(false);
+  const activeThreadIdRef = useRef(null);
+  // Per-thread streaming state: { [sessionId]: { text, model, activity, messages, compacting, isStreaming } }
+  const threadStreamsRef = useRef({});
 
   // Load settings and projects on mount
   useEffect(() => {
@@ -113,6 +141,7 @@ export default function App() {
       setThreads([]);
       setActiveProject(null);
     }
+    activeThreadIdRef.current = null;
     setActiveThreadId(null);
     setMessages([]);
     setStreamingText("");
@@ -165,10 +194,27 @@ export default function App() {
     setModelsLoading(false);
   }
 
-  // Listen for opencode streaming events
+  // Listen for opencode streaming events (session-aware for parallel threads)
   useEffect(() => {
     const unlistenStream = listen("opencode-stream", (event) => {
       const e = event.payload;
+      const sid = e.sessionId;
+      const isActive = sid === activeThreadIdRef.current;
+
+      if (!isActive) {
+        // Background thread — buffer text only
+        const ts = threadStreamsRef.current[sid] || { text: "", model: "", isStreaming: true };
+        if (e.model) ts.model = e.model;
+        if (e.eventType === "text_delta") ts.text = (ts.text || "") + (e.content || "");
+        ts.isStreaming = true;
+        threadStreamsRef.current[sid] = ts;
+        return;
+      }
+
+      // Active thread — update UI directly
+      if (e.model) {
+        streamingModelRef.current = e.model;
+      }
       switch (e.eventType) {
         case "text_delta":
           streamingTextRef.current += e.content || "";
@@ -210,8 +256,7 @@ export default function App() {
           break;
         case "tool_result":
           setStreamingActivity((prev) => {
-            // Attach result to matching tool call by tool_call_id
-            const toolCallId = e.toolId; // toolId comes from tool_call_id field
+            const toolCallId = e.toolId;
             const idx = prev.findIndex(
               (item) => item.type === "tool_call" && item.id === toolCallId
             );
@@ -220,7 +265,6 @@ export default function App() {
               updated[idx] = { ...updated[idx], result: e.content || "", status: "done" };
               return updated;
             }
-            // If no matching tool call, add as standalone result
             return [
               ...prev,
               { type: "tool_result", name: e.toolName || "", content: e.content || "" },
@@ -230,14 +274,7 @@ export default function App() {
       }
     });
 
-    const unlistenDone = listen("opencode-done", (event) => {
-      const { output } = event.payload;
-      setIsStreaming(false);
-      setStreamingText("");
-      setStreamingActivity([]);
-      streamingTextRef.current = "";
-
-      // Parse the JSON output from opencode
+    function parseOpencodeOutput(output) {
       let content = output;
       try {
         const parsed = JSON.parse(output);
@@ -248,47 +285,111 @@ export default function App() {
       } catch {
         // Not JSON, use raw output
       }
+      return content;
+    }
 
-      // Handle compact mode — replace all messages with a single checkpoint
+    const unlistenDone = listen("opencode-done", (event) => {
+      const { output, sessionId } = event.payload;
+      const content = parseOpencodeOutput(output);
+      const isActive = sessionId === activeThreadIdRef.current;
+
+      if (!isActive) {
+        // Background thread completed — save pending result
+        const ts = threadStreamsRef.current[sessionId] || {};
+        ts.isStreaming = false;
+        if (ts.compacting) {
+          ts.compacting = false;
+          ts.pendingCompact = content;
+        } else {
+          ts.pendingMessages = ts.pendingMessages || [];
+          ts.pendingMessages.push({
+            role: "assistant",
+            content,
+            timestamp: Date.now(),
+            model: ts.model || "",
+          });
+        }
+        threadStreamsRef.current[sessionId] = ts;
+        return;
+      }
+
+      const modelUsed = streamingModelRef.current;
+      setIsStreaming(false);
+      setStreamingText("");
+      setStreamingActivity([]);
+      streamingTextRef.current = "";
+      streamingModelRef.current = "";
+
       if (compactingRef.current) {
         compactingRef.current = false;
         setMessages([{ role: "compact", content, timestamp: Date.now() }]);
         return;
       }
 
-      const assistantMsg = {
+      setMessages((prev) => [...prev, {
         role: "assistant",
         content,
         timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+        model: modelUsed,
+      }]);
     });
 
     const unlistenError = listen("opencode-error", (event) => {
+      const { error, sessionId } = event.payload;
+      const isActive = sessionId === activeThreadIdRef.current;
+
+      if (!isActive) {
+        // Background thread errored — save pending error
+        const ts = threadStreamsRef.current[sessionId] || {};
+        ts.isStreaming = false;
+        if (ts.compacting) {
+          ts.compacting = false;
+          ts.pendingMessages = ts.pendingMessages || [];
+          ts.pendingMessages.push({
+            role: "system",
+            content: `Compact failed: ${error}`,
+            timestamp: Date.now(),
+          });
+        } else {
+          ts.pendingMessages = ts.pendingMessages || [];
+          ts.pendingMessages.push({
+            role: "assistant",
+            content: `Error: ${error}`,
+            timestamp: Date.now(),
+            isError: true,
+            model: ts.model || "",
+          });
+        }
+        threadStreamsRef.current[sessionId] = ts;
+        return;
+      }
+
+      const modelUsed = streamingModelRef.current;
       setIsStreaming(false);
       setStreamingText("");
       setStreamingActivity([]);
       streamingTextRef.current = "";
+      streamingModelRef.current = "";
 
       if (compactingRef.current) {
         compactingRef.current = false;
         setMessages((prev) => [
           ...prev,
-          { role: "system", content: `Compact failed: ${event.payload.error}`, timestamp: Date.now() },
+          { role: "system", content: `Compact failed: ${error}`, timestamp: Date.now() },
         ]);
         return;
       }
 
-      const errorMsg = {
+      setMessages((prev) => [...prev, {
         role: "assistant",
-        content: `Error: ${event.payload.error}`,
+        content: `Error: ${error}`,
         timestamp: Date.now(),
         isError: true,
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+        model: modelUsed,
+      }]);
     });
 
-    // LLM streaming events as fallback
+    // LLM streaming events as fallback (direct API — updates active thread only)
     const unlistenResponse = listen("stream-response", (event) => {
       const { fullText } = event.payload;
       streamingTextRef.current = fullText;
@@ -297,23 +398,24 @@ export default function App() {
 
     const unlistenStreamDone = listen("stream-done", (event) => {
       const { fullText } = event.payload;
+      const modelUsed = streamingModelRef.current;
       setIsStreaming(false);
       setStreamingText("");
       streamingTextRef.current = "";
+      streamingModelRef.current = "";
 
-      // Handle compact mode
       if (compactingRef.current) {
         compactingRef.current = false;
         setMessages([{ role: "compact", content: fullText, timestamp: Date.now() }]);
         return;
       }
 
-      const assistantMsg = {
+      setMessages((prev) => [...prev, {
         role: "assistant",
         content: fullText,
         timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+        model: modelUsed,
+      }]);
     });
 
     const unlistenStreamError = listen("stream-error", (event) => {
@@ -330,13 +432,12 @@ export default function App() {
         return;
       }
 
-      const errorMsg = {
+      setMessages((prev) => [...prev, {
         role: "assistant",
         content: `Error: ${event.payload.error}`,
         timestamp: Date.now(),
         isError: true,
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      }]);
     });
 
     return () => {
@@ -439,24 +540,92 @@ export default function App() {
 
   function newThread() {
     if (!activeProjectId) return;
+    // Save current thread's streaming state (don't cancel it)
+    const oldId = activeThreadIdRef.current;
+    if (oldId && isStreaming) {
+      threadStreamsRef.current[oldId] = {
+        text: streamingTextRef.current,
+        model: streamingModelRef.current,
+        activity: [],  // will keep receiving via events
+        isStreaming: true,
+        compacting: compactingRef.current,
+      };
+    }
     const id = generateId();
+    activeThreadIdRef.current = id;
     setActiveThreadId(id);
     setMessages([]);
     setStreamingText("");
     setStreamingActivity([]);
+    streamingTextRef.current = "";
+    streamingModelRef.current = "";
+    compactingRef.current = false;
     setIsStreaming(false);
   }
 
   async function selectThread(threadId) {
     if (!activeProjectId) return;
+    // Save current thread's streaming state (don't cancel it)
+    const oldId = activeThreadIdRef.current;
+    if (oldId && isStreaming) {
+      threadStreamsRef.current[oldId] = {
+        text: streamingTextRef.current,
+        model: streamingModelRef.current,
+        activity: [],
+        isStreaming: true,
+        compacting: compactingRef.current,
+      };
+    }
     try {
       const session = await invoke("load_project_thread", {
         projectId: activeProjectId,
         sessionId: threadId,
       });
       if (session) {
+        activeThreadIdRef.current = session.id;
         setActiveThreadId(session.id);
-        setMessages(session.messages || []);
+
+        let loadedMessages = session.messages || [];
+        const saved = threadStreamsRef.current[session.id];
+
+        if (saved) {
+          // Apply any pending compact or messages from background completion
+          if (saved.pendingCompact) {
+            loadedMessages = [{ role: "compact", content: saved.pendingCompact, timestamp: Date.now() }];
+            delete saved.pendingCompact;
+          } else if (saved.pendingMessages && saved.pendingMessages.length > 0) {
+            loadedMessages = [...loadedMessages, ...saved.pendingMessages];
+            saved.pendingMessages = [];
+          }
+
+          if (saved.isStreaming) {
+            // Thread is still streaming in the background — restore live state
+            streamingTextRef.current = saved.text || "";
+            streamingModelRef.current = saved.model || "";
+            compactingRef.current = saved.compacting || false;
+            setStreamingText(saved.text || "");
+            setStreamingActivity([]);
+            setIsStreaming(true);
+          } else {
+            // Thread finished — clean up
+            delete threadStreamsRef.current[session.id];
+            streamingTextRef.current = "";
+            streamingModelRef.current = "";
+            compactingRef.current = false;
+            setStreamingText("");
+            setStreamingActivity([]);
+            setIsStreaming(false);
+          }
+        } else {
+          streamingTextRef.current = "";
+          streamingModelRef.current = "";
+          compactingRef.current = false;
+          setStreamingText("");
+          setStreamingActivity([]);
+          setIsStreaming(false);
+        }
+
+        setMessages(loadedMessages);
       }
     } catch (e) {
       console.error("Failed to load thread:", e);
@@ -471,9 +640,12 @@ export default function App() {
         sessionId: threadId,
       });
       if (activeThreadId === threadId) {
+        activeThreadIdRef.current = null;
         setActiveThreadId(null);
         setMessages([]);
       }
+      // Clean up any streaming state for the deleted thread
+      delete threadStreamsRef.current[threadId];
       loadThreads(activeProjectId);
     } catch (e) {
       console.error("Failed to delete thread:", e);
@@ -559,7 +731,10 @@ export default function App() {
         streamingTextRef.current = "";
 
         let threadId = activeThreadId || generateId();
-        if (!activeThreadId) setActiveThreadId(threadId);
+        if (!activeThreadId) {
+          activeThreadIdRef.current = threadId;
+          setActiveThreadId(threadId);
+        }
 
         if (opencodeAvailable && activeProject?.directory) {
           try {
@@ -612,6 +787,7 @@ export default function App() {
     let threadId = activeThreadId;
     if (!threadId) {
       threadId = generateId();
+      activeThreadIdRef.current = threadId;
       setActiveThreadId(threadId);
     }
 
@@ -619,6 +795,9 @@ export default function App() {
       role: "user",
       content: trimmed,
       timestamp: Date.now(),
+      model: settings.model,
+      effort: settings.effort,
+      verbosity: settings.verbosity,
     };
 
     const newMessages = [...messages, userMsg];
@@ -627,9 +806,27 @@ export default function App() {
     setStreamingText("");
     setStreamingActivity([]);
     streamingTextRef.current = "";
+    streamingModelRef.current = settings.model;
 
-    // Use opencode CLI if available
-    if (opencodeAvailable && activeProject?.directory) {
+    const opencodeEligible = opencodeAvailable && activeProject?.directory;
+    const opencodeModelOk = isOpencodeCompatibleModel(settings.provider, settings.model);
+    const shouldUseOpencode = opencodeEligible && opencodeModelOk;
+
+    if (opencodeEligible && !opencodeModelOk) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "system",
+          content:
+            `Selected model "${settings.model}" is not supported by the opencode CLI for ${settings.provider} (chat/completions only). ` +
+            "Falling back to direct API streaming (tools disabled).",
+          timestamp: Date.now(),
+        },
+      ]);
+    }
+
+    // Use opencode CLI if available and model is compatible
+    if (shouldUseOpencode) {
       try {
         const fullPrompt = buildHistoryPrompt(messages, trimmed);
         await invoke("send_opencode", {
@@ -647,10 +844,30 @@ export default function App() {
           content: `Error: ${e}`,
           timestamp: Date.now(),
           isError: true,
+          model: settings.model,
+          effort: settings.effort,
+          verbosity: settings.verbosity,
         };
         setMessages((prev) => [...prev, errorMsg]);
       }
     } else {
+      if (!hasProviderApiKey(settings)) {
+        setIsStreaming(false);
+        setStreamingText("");
+        streamingTextRef.current = "";
+        const errorMsg = {
+          role: "assistant",
+          content: `Error: Missing API key for ${settings.provider}. Configure it in Settings.`,
+          timestamp: Date.now(),
+          isError: true,
+          model: settings.model,
+          effort: settings.effort,
+          verbosity: settings.verbosity,
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        return;
+      }
+
       // Fallback to direct LLM streaming — pass full message array for native context
       const lastCompactIdx = newMessages.findLastIndex((m) => m.role === "compact");
       let apiMessages;
@@ -683,6 +900,9 @@ export default function App() {
           content: `Error: ${e}`,
           timestamp: Date.now(),
           isError: true,
+          model: settings.model,
+          effort: settings.effort,
+          verbosity: settings.verbosity,
         };
         setMessages((prev) => [...prev, errorMsg]);
       }
@@ -690,13 +910,17 @@ export default function App() {
   }
 
   async function cancelStream() {
+    const sid = activeThreadIdRef.current;
     try {
-      if (opencodeAvailable) {
-        await invoke("cancel_opencode");
+      if (opencodeAvailable && sid) {
+        await invoke("cancel_opencode", { sessionId: sid });
       }
       await invoke("cancel_stream");
     } catch (e) {
       console.error("Failed to cancel:", e);
+    }
+    if (sid) {
+      delete threadStreamsRef.current[sid];
     }
     setIsStreaming(false);
   }
@@ -931,14 +1155,10 @@ export default function App() {
 
   // Check if the current provider has an API key configured (or opencode is available)
   const hasApiKey = (() => {
-    if (opencodeAvailable) return true;
-    switch (settings.provider) {
-      case "openai": return !!settings.openaiApiKey;
-      case "anthropic": return !!settings.anthropicApiKey;
-      case "gemini": return !!settings.geminiApiKey;
-      case "azure": return !!(settings.azureOpenaiApiKey && settings.azureOpenaiEndpoint);
-      default: return false;
+    if (opencodeAvailable && isOpencodeCompatibleModel(settings.provider, settings.model)) {
+      return true;
     }
+    return hasProviderApiKey(settings);
   })();
 
   const gitSummary = gitStatus
@@ -999,6 +1219,7 @@ export default function App() {
               isStreaming={isStreaming}
               streamingText={streamingText}
               streamingActivity={streamingActivity}
+              model={settings.model}
             />
           ) : (
             <WelcomeScreen

@@ -173,50 +173,61 @@ func (a *App) RunNonInteractive(ctx context.Context, prompt string, outputFormat
 				states[msg.ID] = st
 			}
 
-			// Stream thinking/reasoning deltas
-			thinking := msg.ReasoningContent().Thinking
-			if len(thinking) > st.thinkingLen {
-				delta := thinking[st.thinkingLen:]
-				st.thinkingLen = len(thinking)
-				streamEvent(map[string]string{"type": "thinking", "content": delta})
-			}
+				// Stream thinking/reasoning deltas
+				thinking := msg.ReasoningContent().Thinking
+				if len(thinking) > st.thinkingLen {
+					delta := thinking[st.thinkingLen:]
+					st.thinkingLen = len(thinking)
+					streamEvent(map[string]string{
+						"type":    "thinking",
+						"content": delta,
+						"model":   string(msg.Model),
+					})
+				}
 
-			// Stream text content deltas
-			text := msg.Content().Text
-			if len(text) > st.textLen {
-				delta := text[st.textLen:]
-				st.textLen = len(text)
-				streamEvent(map[string]string{"type": "text_delta", "content": delta})
-			}
+				// Stream text content deltas
+				text := msg.Content().Text
+				if len(text) > st.textLen {
+					delta := text[st.textLen:]
+					st.textLen = len(text)
+					streamEvent(map[string]string{
+						"type":    "text_delta",
+						"content": delta,
+						"model":   string(msg.Model),
+					})
+				}
 
 			// Detect new/finished tool calls
 			for _, tc := range msg.ToolCalls() {
 				wasFinished, seen := st.toolCalls[tc.ID]
 				if !seen {
 					st.toolCalls[tc.ID] = tc.Finished
-					streamEvent(map[string]string{
-						"type":  "tool_start",
-						"name":  tc.Name,
-						"id":    tc.ID,
-						"input": tc.Input,
-					})
-					if tc.Finished {
 						streamEvent(map[string]string{
-							"type": "tool_done",
-							"name": tc.Name,
-							"id":   tc.ID,
+							"type":  "tool_start",
+							"name":  tc.Name,
+							"id":    tc.ID,
+							"input": tc.Input,
+							"model": string(msg.Model),
+						})
+						if tc.Finished {
+							streamEvent(map[string]string{
+								"type":  "tool_done",
+								"name":  tc.Name,
+								"id":    tc.ID,
+								"model": string(msg.Model),
+							})
+						}
+					} else if !wasFinished && tc.Finished {
+						st.toolCalls[tc.ID] = true
+						streamEvent(map[string]string{
+							"type":  "tool_done",
+							"name":  tc.Name,
+							"id":    tc.ID,
+							"input": tc.Input,
+							"model": string(msg.Model),
 						})
 					}
-				} else if !wasFinished && tc.Finished {
-					st.toolCalls[tc.ID] = true
-					streamEvent(map[string]string{
-						"type":  "tool_done",
-						"name":  tc.Name,
-						"id":    tc.ID,
-						"input": tc.Input,
-					})
 				}
-			}
 
 			// Detect new tool results (from tool-role messages)
 			if event.Type == pubsub.CreatedEvent || event.Type == pubsub.UpdatedEvent {
@@ -228,13 +239,14 @@ func (a *App) RunNonInteractive(ctx context.Context, prompt string, outputFormat
 						if len(content) > 500 {
 							content = content[:500] + "..."
 						}
-						streamEvent(map[string]string{
-							"type":         "tool_result",
-							"name":         tr.Name,
-							"tool_call_id": tr.ToolCallID,
-							"content":      content,
-						})
-					}
+							streamEvent(map[string]string{
+								"type":         "tool_result",
+								"name":         tr.Name,
+								"tool_call_id": tr.ToolCallID,
+								"content":      content,
+								"model":        string(msg.Model),
+							})
+						}
 					st.toolResults = len(results)
 				}
 			}

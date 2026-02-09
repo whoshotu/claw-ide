@@ -1,5 +1,6 @@
 use crate::storage::Settings;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -8,7 +9,7 @@ use tokio::sync::Mutex;
 
 #[derive(Default)]
 pub struct OpenCodeState {
-    child: Arc<Mutex<Option<tokio::process::Child>>>,
+    children: Arc<Mutex<HashMap<String, tokio::process::Child>>>,
 }
 
 /// A streaming event parsed from opencode's stderr JSON lines
@@ -22,6 +23,7 @@ struct StderrEvent {
     id: Option<String>,
     input: Option<String>,
     tool_call_id: Option<String>,
+    model: Option<String>,
 }
 
 /// Sent to frontend for each streaming event
@@ -33,6 +35,9 @@ pub struct OpenCodeStreamEvent {
     /// Text content delta or tool result content
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Model ID used for this event
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Tool name (for tool_start, tool_done, tool_result)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
@@ -59,6 +64,19 @@ pub struct OpenCodeError {
 }
 
 fn find_opencode_binary() -> Option<String> {
+    if let Ok(path) = std::env::var("OPENCODE_PATH") {
+        if !path.is_empty() && std::path::Path::new(&path).exists() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let local = cwd.join("opencode-src").join("opencode");
+        if local.exists() {
+            return Some(local.to_string_lossy().to_string());
+        }
+    }
+
     let candidates = [
         dirs::home_dir().map(|h| h.join(".local/bin/opencode")),
         Some(std::path::PathBuf::from("/usr/local/bin/opencode")),
@@ -107,7 +125,7 @@ fn ensure_opencode_config(project_dir: &str, settings: &Settings) {
         match provider_name {
             "anthropic" => "claude-sonnet-4-5-20250929",
             "gemini" => "gemini-2.0-flash",
-            _ => "gpt-4o",
+            _ => "gpt-4.1",
         }
     } else {
         &settings.model
@@ -137,19 +155,24 @@ fn ensure_opencode_config(project_dir: &str, settings: &Settings) {
         title_agent["reasoningEffort"] = serde_json::Value::String(effort.to_string());
     }
 
-    let config = serde_json::json!({
-        "providers": {
-            provider_name: {
-                "apiKey": api_key,
-                "disabled": false
-            }
-        },
+    let mut config = serde_json::json!({
         "agents": {
             "coder": coder_agent,
             "task": task_agent,
             "title": title_agent
         }
     });
+
+    // Only write provider config when a key is set to avoid overriding
+    // environment-based auth with an empty apiKey.
+    if !api_key.is_empty() {
+        config["providers"] = serde_json::json!({
+            provider_name: {
+                "apiKey": api_key,
+                "disabled": false
+            }
+        });
+    }
 
     if let Ok(content) = serde_json::to_string_pretty(&config) {
         let _ = std::fs::write(&config_path, content);
@@ -210,20 +233,23 @@ pub async fn run_opencode(
     let stdout = child.stdout.take();
 
     {
-        let mut guard = state.child.lock().await;
-        *guard = Some(child);
+        let mut guard = state.children.lock().await;
+        guard.insert(session_id.clone(), child);
     }
 
     let app_progress = app.clone();
     let sid_progress = session_id.clone();
 
     let stderr_handle = tokio::spawn(async move {
+        let mut collected: Vec<String> = Vec::new();
         if let Some(stderr) = stderr {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                // Skip noise/warning lines and empty lines
-                if line.contains("WARN") || line.contains("FZF not found") || line.trim().is_empty() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if line.contains("FZF not found") {
                     continue;
                 }
 
@@ -235,15 +261,18 @@ pub async fn run_opencode(
                         event_type: evt.event_type,
                         session_id: sid_progress.clone(),
                         content: evt.content,
+                        model: evt.model,
                         tool_name: evt.name,
                         tool_id,
                         tool_input: evt.input,
                     };
                     let _ = app_progress.emit("opencode-stream", stream_event);
+                } else {
+                    collected.push(line);
                 }
-                // Non-JSON lines (like spinner errors) are silently ignored
             }
         }
+        collected.join("\n")
     });
 
     let stdout_handle = tokio::spawn(async move {
@@ -262,8 +291,8 @@ pub async fn run_opencode(
     });
 
     let status = {
-        let mut guard = state.child.lock().await;
-        if let Some(ref mut child) = *guard {
+        let mut guard = state.children.lock().await;
+        if let Some(child) = guard.get_mut(&session_id) {
             child.wait().await
         } else {
             return Ok(());
@@ -271,11 +300,11 @@ pub async fn run_opencode(
     };
 
     {
-        let mut guard = state.child.lock().await;
-        *guard = None;
+        let mut guard = state.children.lock().await;
+        guard.remove(&session_id);
     }
 
-    let _ = stderr_handle.await;
+    let stderr_output = stderr_handle.await.unwrap_or_default();
     let output = stdout_handle.await.unwrap_or_default();
 
     match status {
@@ -286,8 +315,18 @@ pub async fn run_opencode(
             });
         }
         Ok(exit) => {
+            let mut err_msg = format!(
+                "opencode exited with code: {}.",
+                exit.code().unwrap_or(-1)
+            );
+            if !stderr_output.trim().is_empty() {
+                err_msg.push_str(&format!("\nStderr:\n{}", stderr_output.trim()));
+            }
+            if !output.trim().is_empty() {
+                err_msg.push_str(&format!("\nStdout:\n{}", output.trim()));
+            }
             let _ = app.emit("opencode-error", OpenCodeError {
-                error: format!("opencode exited with code: {}. Output: {}", exit.code().unwrap_or(-1), output),
+                error: err_msg,
                 session_id,
             });
         }
@@ -302,10 +341,9 @@ pub async fn run_opencode(
     Ok(())
 }
 
-pub async fn cancel_opencode(state: &OpenCodeState) {
-    let mut guard = state.child.lock().await;
-    if let Some(ref mut child) = *guard {
+pub async fn cancel_opencode(state: &OpenCodeState, session_id: &str) {
+    let mut guard = state.children.lock().await;
+    if let Some(mut child) = guard.remove(session_id) {
         let _ = child.kill().await;
     }
-    *guard = None;
 }

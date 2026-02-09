@@ -454,8 +454,8 @@ async fn send_opencode(
 }
 
 #[tauri::command]
-async fn cancel_opencode(state: tauri::State<'_, opencode::OpenCodeState>) -> Result<(), String> {
-    opencode::cancel_opencode(&state).await;
+async fn cancel_opencode(state: tauri::State<'_, opencode::OpenCodeState>, session_id: String) -> Result<(), String> {
+    opencode::cancel_opencode(&state, &session_id).await;
     Ok(())
 }
 
@@ -788,7 +788,7 @@ async fn generate_commit_message(
             if api_key.is_empty() || endpoint.is_empty() {
                 return Err("Azure OpenAI API key and endpoint not set.".to_string());
             }
-            let deployment = if settings.model.is_empty() { "gpt-4o".to_string() } else { settings.model.clone() };
+            let deployment = if settings.model.is_empty() { "gpt-4.1".to_string() } else { settings.model.clone() };
             let base = endpoint.trim_end_matches('/');
             let url = format!("{}/openai/deployments/{}/chat/completions?api-version=2024-10-21", base, deployment);
             let body = serde_json::json!({
@@ -819,7 +819,7 @@ async fn generate_commit_message(
             if api_key.is_empty() {
                 return Err("OpenAI API key not set.".to_string());
             }
-            let model = if settings.model.is_empty() { "gpt-4o".to_string() } else { settings.model.clone() };
+            let model = if settings.model.is_empty() { "gpt-4.1".to_string() } else { settings.model.clone() };
             let body = serde_json::json!({
                 "model": model,
                 "messages": [

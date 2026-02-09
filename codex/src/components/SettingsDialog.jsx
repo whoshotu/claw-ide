@@ -63,7 +63,7 @@ export default function SettingsDialog({ settings, models, onSave, onClose }) {
     setFetchError("");
     // Set a sensible default model for the provider
     const defaults = {
-      openai: "gpt-4o",
+      openai: "gpt-4.1",
       anthropic: "claude-sonnet-4-5-20250929",
       gemini: "gemini-2.0-flash",
       azure: "",

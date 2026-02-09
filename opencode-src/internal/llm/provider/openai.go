@@ -10,6 +10,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/responses"
 	"github.com/openai/openai-go/shared"
 	"github.com/opencode-ai/opencode/internal/config"
 	"github.com/opencode-ai/opencode/internal/llm/models"
@@ -168,16 +169,7 @@ func (o *openaiClient) preparedParams(messages []openai.ChatCompletionMessagePar
 
 	if o.providerOptions.model.CanReason == true {
 		params.MaxCompletionTokens = openai.Int(o.providerOptions.maxTokens)
-		switch o.options.reasoningEffort {
-		case "low":
-			params.ReasoningEffort = shared.ReasoningEffortLow
-		case "medium":
-			params.ReasoningEffort = shared.ReasoningEffortMedium
-		case "high":
-			params.ReasoningEffort = shared.ReasoningEffortHigh
-		default:
-			params.ReasoningEffort = shared.ReasoningEffortMedium
-		}
+		params.ReasoningEffort = shared.ReasoningEffort(o.options.reasoningEffort)
 	} else {
 		params.MaxTokens = openai.Int(o.providerOptions.maxTokens)
 	}
@@ -186,6 +178,9 @@ func (o *openaiClient) preparedParams(messages []openai.ChatCompletionMessagePar
 }
 
 func (o *openaiClient) send(ctx context.Context, messages []message.Message, tools []tools.BaseTool) (response *ProviderResponse, err error) {
+	if o.providerOptions.model.UseResponsesAPI {
+		return o.sendResponses(ctx, messages, tools)
+	}
 	params := o.preparedParams(o.convertMessages(messages), o.convertTools(tools))
 	cfg := config.Get()
 	if cfg.Debug {
@@ -239,6 +234,9 @@ func (o *openaiClient) send(ctx context.Context, messages []message.Message, too
 }
 
 func (o *openaiClient) stream(ctx context.Context, messages []message.Message, tools []tools.BaseTool) <-chan ProviderEvent {
+	if o.providerOptions.model.UseResponsesAPI {
+		return o.streamResponses(ctx, messages, tools)
+	}
 	params := o.preparedParams(o.convertMessages(messages), o.convertTools(tools))
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
 		IncludeUsage: openai.Bool(true),
@@ -334,6 +332,324 @@ func (o *openaiClient) stream(ctx context.Context, messages []message.Message, t
 	return eventChan
 }
 
+// --- Responses API methods (for gpt-5.x models) ---
+
+func (o *openaiClient) convertMessagesToResponses(messages []message.Message) responses.ResponseInputParam {
+	var input responses.ResponseInputParam
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case message.User:
+			if len(msg.BinaryContent()) > 0 {
+				var parts responses.ResponseInputMessageContentListParam
+				parts = append(parts, responses.ResponseInputContentUnionParam{
+					OfInputText: &responses.ResponseInputTextParam{
+						Text: msg.Content().String(),
+					},
+				})
+				for _, bc := range msg.BinaryContent() {
+					parts = append(parts, responses.ResponseInputContentUnionParam{
+						OfInputImage: &responses.ResponseInputImageParam{
+							ImageURL: openai.String(bc.String(models.ProviderOpenAI)),
+							Detail:   responses.ResponseInputImageDetailAuto,
+						},
+					})
+				}
+				input = append(input, responses.ResponseInputItemUnionParam{
+					OfMessage: &responses.EasyInputMessageParam{
+						Role: responses.EasyInputMessageRoleUser,
+						Content: responses.EasyInputMessageContentUnionParam{
+							OfInputItemContentList: parts,
+						},
+					},
+				})
+			} else {
+				input = append(input, responses.ResponseInputItemUnionParam{
+					OfMessage: &responses.EasyInputMessageParam{
+						Role: responses.EasyInputMessageRoleUser,
+						Content: responses.EasyInputMessageContentUnionParam{
+							OfString: openai.String(msg.Content().String()),
+						},
+					},
+				})
+			}
+
+		case message.Assistant:
+			if msg.Content().String() != "" {
+				input = append(input, responses.ResponseInputItemUnionParam{
+					OfMessage: &responses.EasyInputMessageParam{
+						Role: responses.EasyInputMessageRoleAssistant,
+						Content: responses.EasyInputMessageContentUnionParam{
+							OfString: openai.String(msg.Content().String()),
+						},
+					},
+				})
+			}
+			for _, call := range msg.ToolCalls() {
+				input = append(input, responses.ResponseInputItemUnionParam{
+					OfFunctionCall: &responses.ResponseFunctionToolCallParam{
+						CallID:    call.ID,
+						Name:      call.Name,
+						Arguments: call.Input,
+					},
+				})
+			}
+
+		case message.Tool:
+			for _, result := range msg.ToolResults() {
+				input = append(input, responses.ResponseInputItemUnionParam{
+					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+						CallID: result.ToolCallID,
+						Output: result.Content,
+					},
+				})
+			}
+		}
+	}
+
+	return input
+}
+
+func (o *openaiClient) convertToolsToResponses(tls []tools.BaseTool) []responses.ToolUnionParam {
+	result := make([]responses.ToolUnionParam, len(tls))
+	for i, tool := range tls {
+		info := tool.Info()
+		result[i] = responses.ToolUnionParam{
+			OfFunction: &responses.FunctionToolParam{
+				Name:        info.Name,
+				Description: openai.String(info.Description),
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": info.Parameters,
+					"required":   info.Required,
+				},
+			},
+		}
+	}
+	return result
+}
+
+func (o *openaiClient) preparedResponsesParams(input responses.ResponseInputParam, tls []responses.ToolUnionParam) responses.ResponseNewParams {
+	params := responses.ResponseNewParams{
+		Model: shared.ResponsesModel(o.providerOptions.model.APIModel),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfInputItemList: input,
+		},
+		Instructions:    openai.String(o.providerOptions.systemMessage),
+		MaxOutputTokens: openai.Int(o.providerOptions.maxTokens),
+		Tools:           tls,
+	}
+
+	if o.providerOptions.model.CanReason {
+		params.Reasoning = shared.ReasoningParam{
+			Effort: shared.ReasoningEffort(o.options.reasoningEffort),
+		}
+	}
+
+	return params
+}
+
+func (o *openaiClient) sendResponses(ctx context.Context, messages []message.Message, tls []tools.BaseTool) (*ProviderResponse, error) {
+	input := o.convertMessagesToResponses(messages)
+	responsesTools := o.convertToolsToResponses(tls)
+	params := o.preparedResponsesParams(input, responsesTools)
+
+	cfg := config.Get()
+	if cfg.Debug {
+		jsonData, _ := json.Marshal(params)
+		logging.Debug("Prepared responses params", "params", string(jsonData))
+	}
+
+	attempts := 0
+	for {
+		attempts++
+		apiResp, err := o.client.Responses.New(ctx, params)
+		if err != nil {
+			retry, after, retryErr := o.shouldRetry(attempts, err)
+			if retryErr != nil {
+				return nil, retryErr
+			}
+			if retry {
+				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(time.Duration(after) * time.Millisecond):
+					continue
+				}
+			}
+			return nil, retryErr
+		}
+
+		content := ""
+		var toolCalls []message.ToolCall
+
+		for _, item := range apiResp.Output {
+			switch item.Type {
+			case "message":
+				for _, part := range item.Content {
+					if part.Type == "output_text" {
+						content += part.Text
+					}
+				}
+			case "function_call":
+				toolCalls = append(toolCalls, message.ToolCall{
+					ID:       item.CallID,
+					Name:     item.Name,
+					Input:    item.Arguments,
+					Type:     "function",
+					Finished: true,
+				})
+			}
+		}
+
+		finishReason := message.FinishReasonEndTurn
+		if len(toolCalls) > 0 {
+			finishReason = message.FinishReasonToolUse
+		}
+		if apiResp.Status == "incomplete" {
+			finishReason = message.FinishReasonMaxTokens
+		}
+
+		return &ProviderResponse{
+			Content:      content,
+			ToolCalls:    toolCalls,
+			Usage:        o.responsesUsage(apiResp),
+			FinishReason: finishReason,
+		}, nil
+	}
+}
+
+func (o *openaiClient) streamResponses(ctx context.Context, messages []message.Message, tls []tools.BaseTool) <-chan ProviderEvent {
+	input := o.convertMessagesToResponses(messages)
+	responsesTools := o.convertToolsToResponses(tls)
+	params := o.preparedResponsesParams(input, responsesTools)
+
+	cfg := config.Get()
+	if cfg.Debug {
+		jsonData, _ := json.Marshal(params)
+		logging.Debug("Prepared responses params", "params", string(jsonData))
+	}
+
+	attempts := 0
+	eventChan := make(chan ProviderEvent)
+
+	go func() {
+		for {
+			attempts++
+			stream := o.client.Responses.NewStreaming(ctx, params)
+
+			currentContent := ""
+			toolCallMap := make(map[string]*message.ToolCall) // keyed by item ID
+			usage := TokenUsage{}
+
+			for stream.Next() {
+				event := stream.Current()
+				switch event.Type {
+				case "response.output_text.delta":
+					eventChan <- ProviderEvent{
+						Type:    EventContentDelta,
+						Content: event.Delta,
+					}
+					currentContent += event.Delta
+
+				case "response.output_item.added":
+					if event.Item.Type == "function_call" {
+						toolCallMap[event.Item.ID] = &message.ToolCall{
+							ID:       event.Item.CallID,
+							Name:     event.Item.Name,
+							Input:    "",
+							Type:     "function",
+							Finished: false,
+						}
+					}
+
+				case "response.function_call_arguments.delta":
+					if tc, ok := toolCallMap[event.ItemID]; ok {
+						tc.Input += event.Delta
+					}
+
+				case "response.function_call_arguments.done":
+					doneEvent := event.AsResponseFunctionCallArgumentsDone()
+					if tc, ok := toolCallMap[doneEvent.ItemID]; ok {
+						tc.Input = doneEvent.Arguments
+						tc.Finished = true
+					}
+
+				case "response.completed":
+					completed := event.AsResponseCompleted()
+					usage = TokenUsage{
+						InputTokens:     completed.Response.Usage.InputTokens,
+						OutputTokens:    completed.Response.Usage.OutputTokens,
+						CacheReadTokens: completed.Response.Usage.InputTokensDetails.CachedTokens,
+					}
+				}
+			}
+
+			err := stream.Err()
+			if err == nil || errors.Is(err, io.EOF) {
+				var toolCalls []message.ToolCall
+				for _, tc := range toolCallMap {
+					toolCalls = append(toolCalls, *tc)
+				}
+
+				finishReason := message.FinishReasonEndTurn
+				if len(toolCalls) > 0 {
+					finishReason = message.FinishReasonToolUse
+				}
+
+				eventChan <- ProviderEvent{
+					Type: EventComplete,
+					Response: &ProviderResponse{
+						Content:      currentContent,
+						ToolCalls:    toolCalls,
+						Usage:        usage,
+						FinishReason: finishReason,
+					},
+				}
+				close(eventChan)
+				return
+			}
+
+			retry, after, retryErr := o.shouldRetry(attempts, err)
+			if retryErr != nil {
+				eventChan <- ProviderEvent{Type: EventError, Error: retryErr}
+				close(eventChan)
+				return
+			}
+			if retry {
+				logging.WarnPersist(fmt.Sprintf("Retrying due to rate limit... attempt %d of %d", attempts, maxRetries), logging.PersistTimeArg, time.Millisecond*time.Duration(after+100))
+				select {
+				case <-ctx.Done():
+					if ctx.Err() != nil {
+						eventChan <- ProviderEvent{Type: EventError, Error: ctx.Err()}
+					}
+					close(eventChan)
+					return
+				case <-time.After(time.Duration(after) * time.Millisecond):
+					continue
+				}
+			}
+			eventChan <- ProviderEvent{Type: EventError, Error: retryErr}
+			close(eventChan)
+			return
+		}
+	}()
+
+	return eventChan
+}
+
+func (o *openaiClient) responsesUsage(resp *responses.Response) TokenUsage {
+	cachedTokens := resp.Usage.InputTokensDetails.CachedTokens
+	inputTokens := resp.Usage.InputTokens - cachedTokens
+
+	return TokenUsage{
+		InputTokens:     inputTokens,
+		OutputTokens:    resp.Usage.OutputTokens,
+		CacheReadTokens: cachedTokens,
+	}
+}
+
 func (o *openaiClient) shouldRetry(attempts int, err error) (bool, int64, error) {
 	var apierr *openai.Error
 	if !errors.As(err, &apierr) {
@@ -415,8 +731,10 @@ func WithReasoningEffort(effort string) OpenAIOption {
 	return func(options *openaiOptions) {
 		defaultReasoningEffort := "medium"
 		switch effort {
-		case "low", "medium", "high":
+		case "none", "minimal", "low", "medium", "high", "xhigh":
 			defaultReasoningEffort = effort
+		case "":
+			// Keep default; don't warn on empty.
 		default:
 			logging.Warn("Invalid reasoning effort, using default: medium")
 		}

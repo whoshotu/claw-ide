@@ -15,14 +15,39 @@ fn openai_supports_verbosity(model: &str) -> bool {
     model.starts_with("gpt-5")
 }
 
-fn normalize_reasoning_effort(effort: &str) -> Option<&'static str> {
+fn openai_use_responses_api(model: &str) -> bool {
+    model.starts_with("gpt-5")
+}
+
+fn extract_response_output_text(parsed: &serde_json::Value) -> Option<String> {
+    let response = parsed.get("response")?;
+    let output = response.get("output")?.as_array()?;
+    let mut text = String::new();
+    for item in output {
+        if item.get("type").and_then(|v| v.as_str()) != Some("message") {
+            continue;
+        }
+        if let Some(content) = item.get("content").and_then(|v| v.as_array()) {
+            for part in content {
+                if part.get("type").and_then(|v| v.as_str()) == Some("output_text") {
+                    if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                        text.push_str(t);
+                    }
+                }
+            }
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn normalize_reasoning_effort(effort: &str) -> Option<&str> {
     match effort {
         "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => Some(effort),
         _ => None,
     }
 }
 
-fn normalize_verbosity(verbosity: &str) -> Option<&'static str> {
+fn normalize_verbosity(verbosity: &str) -> Option<&str> {
     match verbosity {
         "low" | "medium" | "high" => Some(verbosity),
         _ => None,
@@ -78,117 +103,236 @@ pub async fn stream_openai(
         return Ok(());
     }
 
-    let mut chat_messages: Vec<serde_json::Value> = Vec::new();
-    let has_system = messages.iter().any(|m| m.role == "system");
-    if !has_system {
-        chat_messages.push(serde_json::json!({
-            "role": "system",
-            "content": "You are a helpful AI coding assistant. You help developers write, debug, and understand code. Be concise and precise in your responses. Use markdown formatting for code blocks."
-        }));
-    }
-    for msg in &messages {
-        chat_messages.push(serde_json::json!({
-            "role": msg.role,
-            "content": msg.content
-        }));
-    }
+    let default_system = "You are a helpful AI coding assistant. You help developers write, debug, and understand code. Be concise and precise in your responses. Use markdown formatting for code blocks.";
 
     let model = if settings.model.is_empty() {
-        "gpt-4o".to_string()
+        "gpt-4.1".to_string()
     } else {
         settings.model.clone()
     };
 
-    let mut body = serde_json::json!({
-        "model": model,
-        "stream": true,
-        "messages": chat_messages
-    });
-
-    // OpenAI-only knobs, best-effort. Models that don't support them may error.
-    if openai_supports_reasoning_effort(&model) {
-        if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str()) {
-            body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
-        }
-    }
-    if openai_supports_verbosity(&model) {
-        if let Some(v) = normalize_verbosity(settings.verbosity.as_str()) {
-            body["verbosity"] = serde_json::Value::String(v.to_string());
-        }
-    }
-
     let client = Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    if openai_use_responses_api(&model) {
+        let mut input: Vec<serde_json::Value> = Vec::new();
+        let has_system = messages.iter().any(|m| m.role == "system");
+        if !has_system {
+            input.push(serde_json::json!({
+                "role": "system",
+                "content": [{ "type": "input_text", "text": default_system }]
+            }));
+        }
+        for msg in &messages {
+            let content_type = if msg.role == "assistant" {
+                "output_text"
+            } else {
+                "input_text"
+            };
+            input.push(serde_json::json!({
+                "role": msg.role,
+                "content": [{ "type": content_type, "text": msg.content }]
+            }));
+        }
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        let _ = app.emit("stream-error", StreamError {
-            error: format!("OpenAI API error ({}): {}", status, error_text),
+        let mut body = serde_json::json!({
+            "model": model,
+            "stream": true,
+            "input": input,
+            "text": {
+                "format": { "type": "text" }
+            }
         });
-        return Ok(());
-    }
 
-    let state = app.state::<StreamState>();
-    {
-        let mut cancel = state.cancel.lock().await;
-        *cancel = false;
-    }
-
-    let mut stream = response.bytes_stream();
-    let mut buffer = String::new();
-    let mut full_text = String::new();
-
-    while let Some(chunk) = stream.next().await {
-        // Check cancellation
-        {
-            let cancel = state.cancel.lock().await;
-            if *cancel {
-                break;
+        if openai_supports_reasoning_effort(&model) {
+            if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str()) {
+                body["reasoning"] = serde_json::json!({ "effort": effort });
+            }
+        }
+        if openai_supports_verbosity(&model) {
+            if let Some(v) = normalize_verbosity(settings.verbosity.as_str()) {
+                body["text"]["verbosity"] = serde_json::Value::String(v.to_string());
             }
         }
 
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        let response = client
+            .post("https://api.openai.com/v1/responses")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
-        let lines: Vec<&str> = buffer.split('\n').collect();
-        let last = lines.last().cloned().unwrap_or("");
-        let complete_lines = &lines[..lines.len() - 1];
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            let _ = app.emit("stream-error", StreamError {
+                error: format!("OpenAI API error ({}): {}", status, error_text),
+            });
+            return Ok(());
+        }
 
-        for line in complete_lines {
-            let line = line.trim();
-            if let Some(data) = line.strip_prefix("data: ") {
-                let data = data.trim();
-                if data == "[DONE]" {
-                    continue;
-                }
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
-                        full_text.push_str(delta);
-                        let _ = app.emit("stream-response", StreamChunk {
-                            text: delta.to_string(),
-                            full_text: full_text.clone(),
-                        });
+        let state = app.state::<StreamState>();
+        {
+            let mut cancel = state.cancel.lock().await;
+            *cancel = false;
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut full_text = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            {
+                let cancel = state.cancel.lock().await;
+                if *cancel { break; }
+            }
+
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            let lines: Vec<&str> = buffer.split('\n').collect();
+            let last = lines.last().cloned().unwrap_or("");
+            let complete_lines = &lines[..lines.len() - 1];
+
+            for line in complete_lines {
+                let line = line.trim();
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if data == "[DONE]" { continue; }
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        if parsed.get("type").and_then(|v| v.as_str()) == Some("response.output_text.delta") {
+                            if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str()) {
+                                full_text.push_str(delta);
+                                let _ = app.emit("stream-response", StreamChunk {
+                                    text: delta.to_string(),
+                                    full_text: full_text.clone(),
+                                });
+                            }
+                        } else if parsed.get("type").and_then(|v| v.as_str()) == Some("response.completed") {
+                            if full_text.is_empty() {
+                                if let Some(text) = extract_response_output_text(&parsed) {
+                                    full_text = text.clone();
+                                    let _ = app.emit("stream-response", StreamChunk {
+                                        text,
+                                        full_text: full_text.clone(),
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
             }
+
+            buffer = last.to_string();
         }
 
-        buffer = last.to_string();
-    }
+        let _ = app.emit("stream-done", StreamDone {
+            full_text,
+            input_tokens: 0,
+            output_tokens: 0,
+        });
+    } else {
+        let mut chat_messages: Vec<serde_json::Value> = Vec::new();
+        let has_system = messages.iter().any(|m| m.role == "system");
+        if !has_system {
+            chat_messages.push(serde_json::json!({
+                "role": "system",
+                "content": default_system
+            }));
+        }
+        for msg in &messages {
+            chat_messages.push(serde_json::json!({
+                "role": msg.role,
+                "content": msg.content
+            }));
+        }
 
-    let _ = app.emit("stream-done", StreamDone {
-        full_text,
-        input_tokens: 0,
-        output_tokens: 0,
-    });
+        let mut body = serde_json::json!({
+            "model": model,
+            "stream": true,
+            "messages": chat_messages
+        });
+
+        if openai_supports_reasoning_effort(&model) {
+            if let Some(effort) = normalize_reasoning_effort(settings.effort.as_str()) {
+                body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
+            }
+        }
+        if openai_supports_verbosity(&model) {
+            if let Some(v) = normalize_verbosity(settings.verbosity.as_str()) {
+                body["verbosity"] = serde_json::Value::String(v.to_string());
+            }
+        }
+
+        let response = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            let _ = app.emit("stream-error", StreamError {
+                error: format!("OpenAI API error ({}): {}", status, error_text),
+            });
+            return Ok(());
+        }
+
+        let state = app.state::<StreamState>();
+        {
+            let mut cancel = state.cancel.lock().await;
+            *cancel = false;
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut full_text = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            {
+                let cancel = state.cancel.lock().await;
+                if *cancel { break; }
+            }
+
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            let lines: Vec<&str> = buffer.split('\n').collect();
+            let last = lines.last().cloned().unwrap_or("");
+            let complete_lines = &lines[..lines.len() - 1];
+
+            for line in complete_lines {
+                let line = line.trim();
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        continue;
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
+                            full_text.push_str(delta);
+                            let _ = app.emit("stream-response", StreamChunk {
+                                text: delta.to_string(),
+                                full_text: full_text.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            buffer = last.to_string();
+        }
+
+        let _ = app.emit("stream-done", StreamDone {
+            full_text,
+            input_tokens: 0,
+            output_tokens: 0,
+        });
+    }
 
     Ok(())
 }
@@ -366,7 +510,7 @@ pub async fn stream_azure_openai(
     }
 
     let deployment = if settings.model.is_empty() {
-        "gpt-4o".to_string()
+        "gpt-4.1".to_string()
     } else {
         settings.model.clone()
     };

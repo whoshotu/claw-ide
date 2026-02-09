@@ -20,6 +20,7 @@ type Model struct {
 	DefaultMaxTokens    int64         `json:"default_max_tokens"`
 	CanReason           bool          `json:"can_reason"`
 	SupportsAttachments bool          `json:"supports_attachments"`
+	UseResponsesAPI     bool          `json:"use_responses_api"`
 }
 
 // Model IDs

@@ -47,7 +47,7 @@ const (
 type Agent struct {
 	Model           models.ModelID `json:"model"`
 	MaxTokens       int64          `json:"maxTokens"`
-	ReasoningEffort string         `json:"reasoningEffort"` // For openai models low,medium,heigh
+	ReasoningEffort string         `json:"reasoningEffort"` // For reasoning models: none|minimal|low|medium|high|xhigh
 }
 
 // Provider defines configuration for an LLM provider.
@@ -575,9 +575,9 @@ func validateAgent(cfg *Config, name AgentName, agent Agent) error {
 			updatedAgent.ReasoningEffort = "medium"
 			cfg.Agents[name] = updatedAgent
 		} else {
-			// Check if reasoning effort is valid (low, medium, high)
+			// Check if reasoning effort is valid
 			effort := strings.ToLower(agent.ReasoningEffort)
-			if effort != "low" && effort != "medium" && effort != "high" {
+			if effort != "none" && effort != "minimal" && effort != "low" && effort != "medium" && effort != "high" && effort != "xhigh" {
 				logging.Warn("invalid reasoning effort, setting to medium",
 					"agent", name,
 					"model", agent.Model,

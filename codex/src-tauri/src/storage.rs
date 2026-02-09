@@ -37,7 +37,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             provider: "openai".to_string(),
-            model: "gpt-4o".to_string(),
+            model: "gpt-4.1".to_string(),
             openai_api_key: String::new(),
             anthropic_api_key: String::new(),
             gemini_api_key: String::new(),
@@ -108,25 +108,38 @@ pub fn load_settings() -> Settings {
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(settings) = serde_json::from_str(&content) {
-                return settings;
+                return merge_env_settings(settings);
             }
         }
     }
-    let mut settings = Settings::default();
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        settings.openai_api_key = key;
+    merge_env_settings(Settings::default())
+}
+
+fn merge_env_settings(mut settings: Settings) -> Settings {
+    if settings.openai_api_key.is_empty() {
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            settings.openai_api_key = key;
+        }
     }
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        settings.anthropic_api_key = key;
+    if settings.anthropic_api_key.is_empty() {
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            settings.anthropic_api_key = key;
+        }
     }
-    if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-        settings.gemini_api_key = key;
+    if settings.gemini_api_key.is_empty() {
+        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+            settings.gemini_api_key = key;
+        }
     }
-    if let Ok(key) = std::env::var("AZURE_OPENAI_API_KEY") {
-        settings.azure_openai_api_key = key;
+    if settings.azure_openai_api_key.is_empty() {
+        if let Ok(key) = std::env::var("AZURE_OPENAI_API_KEY") {
+            settings.azure_openai_api_key = key;
+        }
     }
-    if let Ok(endpoint) = std::env::var("AZURE_OPENAI_ENDPOINT") {
-        settings.azure_openai_endpoint = endpoint;
+    if settings.azure_openai_endpoint.is_empty() {
+        if let Ok(endpoint) = std::env::var("AZURE_OPENAI_ENDPOINT") {
+            settings.azure_openai_endpoint = endpoint;
+        }
     }
     settings
 }

@@ -175,7 +175,7 @@ function StreamingActivity({ activity }) {
   );
 }
 
-export default function MessagesArea({ messages, isStreaming, streamingText, streamingActivity }) {
+export default function MessagesArea({ messages, isStreaming, streamingText, streamingActivity, model }) {
   const containerRef = useRef(null);
   const shouldAutoScroll = useRef(true);
 
@@ -203,6 +203,9 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
   }
 
   const hasActivity = streamingActivity && streamingActivity.length > 0;
+  const assistantLabel = (msgModel) =>
+    msgModel ? `OpenCodex (${msgModel})` : "OpenCodex";
+  const streamingLabel = assistantLabel(model);
 
   return (
     <div className="messages-area" ref={containerRef} onScroll={handleScroll} onClick={handleClick}>
@@ -240,7 +243,7 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
             <div key={idx} className={`message ${msg.role}`}>
               <div className="message-header">
                 <span className="message-role">
-                  {msg.role === "user" ? "You" : "OpenCodex"}
+                  {msg.role === "user" ? "You" : assistantLabel(msg.model)}
                 </span>
               </div>
               <div className="message-content">
@@ -252,7 +255,7 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
         {isStreaming && (hasActivity || streamingText) && (
           <div className="message assistant">
             <div className="message-header">
-              <span className="message-role">OpenCodex</span>
+              <span className="message-role">{streamingLabel}</span>
             </div>
             <div className="message-content">
               {hasActivity && <StreamingActivity activity={streamingActivity} />}
@@ -263,7 +266,7 @@ export default function MessagesArea({ messages, isStreaming, streamingText, str
         {isStreaming && !hasActivity && !streamingText && (
           <div className="message assistant">
             <div className="message-header">
-              <span className="message-role">OpenCodex</span>
+              <span className="message-role">{streamingLabel}</span>
             </div>
             <div className="thinking-indicator">
               <div className="thinking-dots">

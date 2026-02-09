@@ -230,7 +230,7 @@ func generateSchema() map[string]any {
 				"reasoningEffort": map[string]any{
 					"type":        "string",
 					"description": "Reasoning effort for models that support it (OpenAI, Anthropic)",
-					"enum":        []string{"low", "medium", "high"},
+					"enum":        []string{"none", "minimal", "low", "medium", "high", "xhigh"},
 				},
 			},
 			"required": []string{"model"},
