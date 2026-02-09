@@ -71,7 +71,110 @@ function MessageContent({ content, isError }) {
   );
 }
 
-export default function MessagesArea({ messages, isStreaming, streamingText, progressLines }) {
+const TOOL_ICONS = {
+  bash: "terminal",
+  read_file: "file",
+  write_file: "pencil",
+  ls: "folder",
+  glob: "search",
+  grep: "search",
+  patch: "pencil",
+};
+
+function getToolLabel(name, input) {
+  try {
+    const parsed = typeof input === "string" ? JSON.parse(input) : input;
+    switch (name) {
+      case "bash":
+        return `$ ${parsed.command || "running command..."}`;
+      case "read_file":
+        return `Reading ${parsed.path || parsed.file || "file"}`;
+      case "write_file":
+        return `Writing ${parsed.path || parsed.file || "file"}`;
+      case "ls":
+        return `Listing ${parsed.path || parsed.dir || "."}`;
+      case "glob":
+        return `Finding ${parsed.pattern || "files"}`;
+      case "grep":
+        return `Searching for ${parsed.pattern || "pattern"}`;
+      case "patch":
+        return `Patching ${parsed.path || parsed.file || "file"}`;
+      default:
+        return name;
+    }
+  } catch {
+    return name;
+  }
+}
+
+function ToolCallCard({ activity }) {
+  const isRunning = activity.status === "running";
+  const label = getToolLabel(activity.name, activity.input);
+
+  return (
+    <div className={`tool-call-card ${isRunning ? "running" : "done"}`}>
+      <div className="tool-call-header">
+        <span className={`tool-icon ${TOOL_ICONS[activity.name] || "gear"}`}>
+          {isRunning ? (
+            <svg width="14" height="14" viewBox="0 0 14 14" className="spinner-icon">
+              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeDasharray="20 12" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 14 14">
+              <path d="M3 7l3 3 5-5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </span>
+        <span className="tool-call-label">{label}</span>
+      </div>
+      {activity.result && (
+        <div className="tool-call-result">
+          <pre>{activity.result}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StreamingActivity({ activity }) {
+  return (
+    <div className="streaming-activity">
+      {activity.map((item, idx) => {
+        if (item.type === "thinking") {
+          return (
+            <div key={idx} className="thinking-block">
+              <span className="thinking-label">Thinking</span>
+              <div className="thinking-content">{item.content}</div>
+            </div>
+          );
+        }
+        if (item.type === "tool_call") {
+          return <ToolCallCard key={item.id || idx} activity={item} />;
+        }
+        if (item.type === "tool_result") {
+          return (
+            <div key={idx} className="tool-call-card done">
+              <div className="tool-call-header">
+                <span className="tool-icon">
+                  <svg width="14" height="14" viewBox="0 0 14 14">
+                    <path d="M3 7l3 3 5-5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <span className="tool-call-label">{item.name || "tool"}</span>
+              </div>
+              <div className="tool-call-result">
+                <pre>{item.content}</pre>
+              </div>
+            </div>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+export default function MessagesArea({ messages, isStreaming, streamingText, streamingActivity }) {
   const containerRef = useRef(null);
   const shouldAutoScroll = useRef(true);
 
@@ -79,13 +182,15 @@ export default function MessagesArea({ messages, isStreaming, streamingText, pro
     if (shouldAutoScroll.current && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [messages, streamingText, progressLines]);
+  }, [messages, streamingText, streamingActivity]);
 
   function handleScroll() {
     if (!containerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
     shouldAutoScroll.current = scrollHeight - scrollTop - clientHeight < 100;
   }
+
+  const hasActivity = streamingActivity && streamingActivity.length > 0;
 
   return (
     <div className="messages-area" ref={containerRef} onScroll={handleScroll}>
@@ -102,17 +207,18 @@ export default function MessagesArea({ messages, isStreaming, streamingText, pro
             </div>
           </div>
         ))}
-        {isStreaming && streamingText && (
+        {isStreaming && (hasActivity || streamingText) && (
           <div className="message assistant">
             <div className="message-header">
               <span className="message-role">Codex</span>
             </div>
             <div className="message-content">
-              <MessageContent content={streamingText} />
+              {hasActivity && <StreamingActivity activity={streamingActivity} />}
+              {streamingText && <MessageContent content={streamingText} />}
             </div>
           </div>
         )}
-        {isStreaming && !streamingText && (
+        {isStreaming && !hasActivity && !streamingText && (
           <div className="message assistant">
             <div className="message-header">
               <span className="message-role">Codex</span>

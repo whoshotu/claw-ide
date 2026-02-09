@@ -566,6 +566,114 @@ body {
   50% { opacity: 1; transform: scale(1); }
 }
 
+/* Streaming Activity */
+.streaming-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tool-call-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.tool-call-card.running {
+  border-color: var(--accent-blue);
+  border-left: 2px solid var(--accent-blue);
+}
+
+.tool-call-card.done {
+  border-color: var(--border);
+  border-left: 2px solid var(--accent-green);
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.tool-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.tool-call-card.running .tool-icon {
+  color: var(--accent-blue);
+}
+
+.tool-call-card.done .tool-icon {
+  color: var(--accent-green);
+}
+
+.spinner-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.tool-call-label {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-call-result {
+  border-top: 1px solid var(--border);
+  background: var(--bg-code);
+  padding: 6px 10px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.tool-call-result pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.thinking-block {
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.thinking-label {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-purple);
+  margin-bottom: 4px;
+}
+
+.thinking-content {
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.5;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
 /* Error */
 .error-message {
   background: rgba(239, 68, 68, 0.1);

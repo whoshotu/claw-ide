@@ -1,5 +1,5 @@
 use crate::storage::Settings;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -11,11 +11,37 @@ pub struct OpenCodeState {
     child: Arc<Mutex<Option<tokio::process::Child>>>,
 }
 
+/// A streaming event parsed from opencode's stderr JSON lines
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct StderrEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    content: Option<String>,
+    name: Option<String>,
+    id: Option<String>,
+    input: Option<String>,
+    tool_call_id: Option<String>,
+}
+
+/// Sent to frontend for each streaming event
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct OpenCodeProgress {
-    pub line: String,
+pub struct OpenCodeStreamEvent {
+    pub event_type: String,
     pub session_id: String,
+    /// Text content delta or tool result content
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Tool name (for tool_start, tool_done, tool_result)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// Tool call ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_id: Option<String>,
+    /// Tool input JSON (for tool_start)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -177,14 +203,26 @@ pub async fn run_opencode(
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                // Skip noise/warning lines
+                // Skip noise/warning lines and empty lines
                 if line.contains("WARN") || line.contains("FZF not found") || line.trim().is_empty() {
                     continue;
                 }
-                let _ = app_progress.emit("opencode-progress", OpenCodeProgress {
-                    line: line.clone(),
-                    session_id: sid_progress.clone(),
-                });
+
+                // Try to parse as JSON streaming event
+                if let Ok(evt) = serde_json::from_str::<StderrEvent>(&line) {
+                    // Use id if present, otherwise fall back to tool_call_id
+                    let tool_id = evt.id.or(evt.tool_call_id);
+                    let stream_event = OpenCodeStreamEvent {
+                        event_type: evt.event_type,
+                        session_id: sid_progress.clone(),
+                        content: evt.content,
+                        tool_name: evt.name,
+                        tool_id,
+                        tool_input: evt.input,
+                    };
+                    let _ = app_progress.emit("opencode-stream", stream_event);
+                }
+                // Non-JSON lines (like spinner errors) are silently ignored
             }
         }
     });

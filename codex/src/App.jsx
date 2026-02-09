@@ -44,7 +44,7 @@ export default function App() {
   // Streaming / opencode state
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
-  const [progressLines, setProgressLines] = useState([]);
+  const [streamingActivity, setStreamingActivity] = useState([]); // tool calls, thinking
   const [opencodeAvailable, setOpencodeAvailable] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
@@ -77,6 +77,7 @@ export default function App() {
     setActiveThreadId(null);
     setMessages([]);
     setStreamingText("");
+    setStreamingActivity([]);
     setIsStreaming(false);
   }, [activeProjectId]);
 
@@ -102,27 +103,82 @@ export default function App() {
     setModelsLoading(false);
   }
 
-  // Listen for opencode events
+  // Listen for opencode streaming events
   useEffect(() => {
-    const unlistenProgress = listen("opencode-progress", (event) => {
-      const { line } = event.payload;
-      setProgressLines((prev) => [...prev.slice(-50), line]);
-      setStreamingText((prev) => prev + line + "\n");
-      streamingTextRef.current += line + "\n";
+    const unlistenStream = listen("opencode-stream", (event) => {
+      const e = event.payload;
+      switch (e.eventType) {
+        case "text_delta":
+          streamingTextRef.current += e.content || "";
+          setStreamingText(streamingTextRef.current);
+          break;
+        case "thinking":
+          setStreamingActivity((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.type === "thinking") {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, content: last.content + (e.content || "") },
+              ];
+            }
+            return [...prev, { type: "thinking", content: e.content || "" }];
+          });
+          break;
+        case "tool_start":
+          setStreamingActivity((prev) => [
+            ...prev,
+            {
+              type: "tool_call",
+              name: e.toolName || "",
+              id: e.toolId || "",
+              input: e.toolInput || "",
+              status: "running",
+              result: null,
+            },
+          ]);
+          break;
+        case "tool_done":
+          setStreamingActivity((prev) =>
+            prev.map((item) =>
+              item.type === "tool_call" && item.id === e.toolId
+                ? { ...item, status: "done", input: e.toolInput || item.input }
+                : item
+            )
+          );
+          break;
+        case "tool_result":
+          setStreamingActivity((prev) => {
+            // Attach result to matching tool call by tool_call_id
+            const toolCallId = e.toolId; // toolId comes from tool_call_id field
+            const idx = prev.findIndex(
+              (item) => item.type === "tool_call" && item.id === toolCallId
+            );
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], result: e.content || "", status: "done" };
+              return updated;
+            }
+            // If no matching tool call, add as standalone result
+            return [
+              ...prev,
+              { type: "tool_result", name: e.toolName || "", content: e.content || "" },
+            ];
+          });
+          break;
+      }
     });
 
     const unlistenDone = listen("opencode-done", (event) => {
       const { output } = event.payload;
       setIsStreaming(false);
       setStreamingText("");
-      setProgressLines([]);
+      setStreamingActivity([]);
       streamingTextRef.current = "";
 
       // Parse the JSON output from opencode
       let content = output;
       try {
         const parsed = JSON.parse(output);
-        // opencode JSON output typically has a message/content field
         if (parsed.message) content = parsed.message;
         else if (parsed.content) content = parsed.content;
         else if (parsed.response) content = parsed.response;
@@ -142,7 +198,7 @@ export default function App() {
     const unlistenError = listen("opencode-error", (event) => {
       setIsStreaming(false);
       setStreamingText("");
-      setProgressLines([]);
+      setStreamingActivity([]);
       streamingTextRef.current = "";
 
       const errorMsg = {
@@ -154,7 +210,7 @@ export default function App() {
       setMessages((prev) => [...prev, errorMsg]);
     });
 
-    // Also keep LLM streaming events as fallback
+    // LLM streaming events as fallback
     const unlistenResponse = listen("stream-response", (event) => {
       const { fullText } = event.payload;
       streamingTextRef.current = fullText;
@@ -190,7 +246,7 @@ export default function App() {
     });
 
     return () => {
-      unlistenProgress.then((fn) => fn());
+      unlistenStream.then((fn) => fn());
       unlistenDone.then((fn) => fn());
       unlistenError.then((fn) => fn());
       unlistenResponse.then((fn) => fn());
@@ -293,7 +349,7 @@ export default function App() {
     setActiveThreadId(id);
     setMessages([]);
     setStreamingText("");
-    setProgressLines([]);
+    setStreamingActivity([]);
     setIsStreaming(false);
   }
 
@@ -350,7 +406,7 @@ export default function App() {
     setMessages(newMessages);
     setIsStreaming(true);
     setStreamingText("");
-    setProgressLines([]);
+    setStreamingActivity([]);
     streamingTextRef.current = "";
 
     // Use opencode CLI if available
@@ -469,7 +525,7 @@ export default function App() {
             messages={messages}
             isStreaming={isStreaming}
             streamingText={streamingText}
-            progressLines={progressLines}
+            streamingActivity={streamingActivity}
           />
         ) : (
           <WelcomeScreen
