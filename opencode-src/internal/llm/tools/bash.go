@@ -38,25 +38,9 @@ const (
 	MaxOutputLength = 30000
 )
 
-var bannedCommands = []string{
-	"alias", "curl", "curlie", "wget", "axel", "aria2c",
-	"nc", "telnet", "lynx", "w3m", "links", "httpie", "xh",
-	"http-prompt", "chrome", "firefox", "safari",
-}
-
-var safeReadOnlyCommands = []string{
-	"ls", "echo", "pwd", "date", "cal", "uptime", "whoami", "id", "groups", "env", "printenv", "set", "unset", "which", "type", "whereis",
-	"whatis", "uname", "hostname", "df", "du", "free", "top", "ps", "kill", "killall", "nice", "nohup", "time", "timeout",
-
-	"git status", "git log", "git diff", "git show", "git branch", "git tag", "git remote", "git ls-files", "git ls-remote",
-	"git rev-parse", "git config --get", "git config --list", "git describe", "git blame", "git grep", "git shortlog",
-
-	"go version", "go help", "go list", "go env", "go doc", "go vet", "go fmt", "go mod", "go test", "go build", "go run", "go install", "go clean",
-}
 
 func bashDescription() string {
-	bannedCommandsStr := strings.Join(bannedCommands, ", ")
-	return fmt.Sprintf(`Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.
+	return fmt.Sprintf(`Executes a given command in a persistent shell session with optional timeout. All commands are allowed.
 
 Before executing the command, please follow these steps:
 
@@ -64,26 +48,22 @@ Before executing the command, please follow these steps:
  - If the command will create new directories or files, first use the LS tool to verify the parent directory exists and is the correct location
  - For example, before running "mkdir foo/bar", first use LS to check that "foo" exists and is the intended parent directory
 
-2. Security Check:
- - For security and to limit the threat of a prompt injection attack, some commands are limited or banned. If you use a disallowed command, you will receive an error message explaining the restriction. Explain the error to the User.
- - Verify that the command is not one of the banned commands: %s.
-
-3. Command Execution:
+2. Command Execution:
  - After ensuring proper quoting, execute the command.
  - Capture the output of the command.
 
-4. Output Processing:
+3. Output Processing:
  - If the output exceeds %d characters, output will be truncated before being returned to you.
  - Prepare the output for display to the user.
 
-5. Return Result:
+4. Return Result:
  - Provide the processed output of the command.
  - If any errors occurred during execution, include those in the output.
 
 Usage notes:
 - The command argument is required.
 - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 30 minutes.
-- VERY IMPORTANT: You MUST avoid using search commands like 'find' and 'grep'. Instead use Grep, Glob, or Agent tools to search. You MUST avoid read tools like 'cat', 'head', 'tail', and 'ls', and use FileRead and LS tools to read files.
+- You can run any command including curl, wget, browser openers (start, open, xdg-open), and any other system command.
 - When issuing multiple commands, use the ';' or '&&' operator to separate them. DO NOT use newlines (newlines are ok in quoted strings).
 - IMPORTANT: All commands share the same shell session. Shell state (environment variables, virtual environments, current directory, etc.) persist between commands. For example, if you set an environment variable as part of a command, the environment variable will persist for subsequent commands.
 - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of 'cd'. You may use 'cd' if the User explicitly requests it.
@@ -200,7 +180,7 @@ EOF
 
 Important:
 - Return an empty response - the user will see the gh output directly
-- Never update git config`, bannedCommandsStr, MaxOutputLength)
+- Never update git config`, MaxOutputLength)
 }
 
 func NewBashTool(permission permission.Service) BaseTool {
@@ -243,46 +223,6 @@ func (b *bashTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error)
 		return NewTextErrorResponse("missing command"), nil
 	}
 
-	baseCmd := strings.Fields(params.Command)[0]
-	for _, banned := range bannedCommands {
-		if strings.EqualFold(baseCmd, banned) {
-			return NewTextErrorResponse(fmt.Sprintf("command '%s' is not allowed", baseCmd)), nil
-		}
-	}
-
-	isSafeReadOnly := false
-	cmdLower := strings.ToLower(params.Command)
-
-	for _, safe := range safeReadOnlyCommands {
-		if strings.HasPrefix(cmdLower, strings.ToLower(safe)) {
-			if len(cmdLower) == len(safe) || cmdLower[len(safe)] == ' ' || cmdLower[len(safe)] == '-' {
-				isSafeReadOnly = true
-				break
-			}
-		}
-	}
-
-	sessionID, messageID := GetContextValues(ctx)
-	if sessionID == "" || messageID == "" {
-		return ToolResponse{}, fmt.Errorf("session ID and message ID are required for creating a new file")
-	}
-	if !isSafeReadOnly {
-		p := b.permissions.Request(
-			permission.CreatePermissionRequest{
-				SessionID:   sessionID,
-				Path:        config.WorkingDirectory(),
-				ToolName:    BashToolName,
-				Action:      "execute",
-				Description: fmt.Sprintf("Execute command: %s", params.Command),
-				Params: BashPermissionsParams{
-					Command: params.Command,
-				},
-			},
-		)
-		if !p {
-			return ToolResponse{}, permission.ErrorPermissionDenied
-		}
-	}
 	startTime := time.Now()
 	shell := shell.GetPersistentShell(config.WorkingDirectory())
 	stdout, stderr, exitCode, interrupted, err := shell.Exec(ctx, params.Command, params.Timeout)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"unicode"
@@ -82,7 +83,11 @@ const (
 func (m *editorCmp) openEditor() tea.Cmd {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
-		editor = "nvim"
+		if runtime.GOOS == "windows" {
+			editor = "notepad"
+		} else {
+			editor = "nvim"
+		}
 	}
 
 	tmpfile, err := os.CreateTemp("", "msg_*.md")

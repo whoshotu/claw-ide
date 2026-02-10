@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,7 +19,7 @@ import (
 
 type PersistentShell struct {
 	cmd          *exec.Cmd
-	stdin        *os.File
+	stdin        io.WriteCloser
 	isAlive      bool
 	cwd          string
 	mu           sync.Mutex
@@ -72,15 +74,26 @@ func newPersistentShell(cwd string) *PersistentShell {
 	}
 	
 	if shellPath == "" {
-		shellPath = os.Getenv("SHELL")
-		if shellPath == "" {
-			shellPath = "/bin/bash"
+		if runtime.GOOS == "windows" {
+			shellPath = os.Getenv("COMSPEC")
+			if shellPath == "" {
+				shellPath = "cmd.exe"
+			}
+		} else {
+			shellPath = os.Getenv("SHELL")
+			if shellPath == "" {
+				shellPath = "/bin/bash"
+			}
 		}
 	}
-	
+
 	// Default shell args
 	if len(shellArgs) == 0 {
-		shellArgs = []string{"-l"}
+		if runtime.GOOS == "windows" {
+			shellArgs = []string{"/Q", "/K"}
+		} else {
+			shellArgs = []string{"-l"}
+		}
 	}
 
 	cmd := exec.Command(shellPath, shellArgs...)
@@ -100,7 +113,7 @@ func newPersistentShell(cwd string) *PersistentShell {
 
 	shell := &PersistentShell{
 		cmd:          cmd,
-		stdin:        stdinPipe.(*os.File),
+		stdin:        stdinPipe,
 		isAlive:      true,
 		cwd:          cwd,
 		commandQueue: make(chan *commandExecution, 10),
@@ -161,18 +174,30 @@ func (s *PersistentShell) execCommand(command string, timeout time.Duration, ctx
 		os.Remove(cwdFile)
 	}()
 
-	fullCommand := fmt.Sprintf(`
+	var fullCommand string
+	if runtime.GOOS == "windows" {
+		// cmd.exe compatible: run command with redirected output, capture exit code and cwd
+		fullCommand = fmt.Sprintf("%s > %s 2> %s\r\necho %%ERRORLEVEL%% > %s\r\ncd > %s\r\n",
+			command,
+			shellQuote(stdoutFile),
+			shellQuote(stderrFile),
+			shellQuote(statusFile),
+			shellQuote(cwdFile),
+		)
+	} else {
+		fullCommand = fmt.Sprintf(`
 eval %s < /dev/null > %s 2> %s
 EXEC_EXIT_CODE=$?
 pwd > %s
 echo $EXEC_EXIT_CODE > %s
 `,
-		shellQuote(command),
-		shellQuote(stdoutFile),
-		shellQuote(stderrFile),
-		shellQuote(cwdFile),
-		shellQuote(statusFile),
-	)
+			shellQuote(command),
+			shellQuote(stdoutFile),
+			shellQuote(stderrFile),
+			shellQuote(cwdFile),
+			shellQuote(statusFile),
+		)
+	}
 
 	_, err := s.stdin.Write([]byte(fullCommand + "\n"))
 	if err != nil {
@@ -248,6 +273,13 @@ func (s *PersistentShell) killChildren() {
 		return
 	}
 
+	if runtime.GOOS == "windows" {
+		// Use taskkill to kill the process tree on Windows
+		killCmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", s.cmd.Process.Pid), "/T", "/F")
+		killCmd.Run()
+		return
+	}
+
 	pgrepCmd := exec.Command("pgrep", "-P", fmt.Sprintf("%d", s.cmd.Process.Pid))
 	output, err := pgrepCmd.Output()
 	if err != nil {
@@ -302,6 +334,9 @@ func (s *PersistentShell) Close() {
 }
 
 func shellQuote(s string) string {
+	if runtime.GOOS == "windows" {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 

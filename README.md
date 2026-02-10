@@ -54,6 +54,9 @@ This build includes several Windows-specific improvements:
 - Reduced polling — git status checks every 15s (was 5s), directory refresh every 10s (was 4s)
 - Windows binary discovery — uses `where` instead of `which`, searches Windows-specific paths
 - Large file support — file viewer raised from 250 KB to 2 MB with chunked reading for bigger files
+- Windows shell support — persistent shell uses `cmd.exe` instead of `/bin/bash`, with proper command syntax and `taskkill` for process management
+- No command restrictions — all bash/shell commands are allowed (curl, wget, start, open, etc.)
+- Windows config defaults — shell and editor defaults detect Windows automatically (`cmd.exe`, `notepad`)
 
 ## Build from Source
 

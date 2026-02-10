@@ -233,13 +233,24 @@ func setDefaults(debug bool) {
 	viper.SetDefault("tui.theme", "opencode")
 	viper.SetDefault("autoCompact", true)
 
-	// Set default shell from environment or fallback to /bin/bash
-	shellPath := os.Getenv("SHELL")
-	if shellPath == "" {
-		shellPath = "/bin/bash"
+	// Set default shell from environment or platform-appropriate fallback
+	var shellPath string
+	var shellArgs []string
+	if runtime.GOOS == "windows" {
+		shellPath = os.Getenv("COMSPEC")
+		if shellPath == "" {
+			shellPath = "cmd.exe"
+		}
+		shellArgs = []string{"/Q", "/K"}
+	} else {
+		shellPath = os.Getenv("SHELL")
+		if shellPath == "" {
+			shellPath = "/bin/bash"
+		}
+		shellArgs = []string{"-l"}
 	}
 	viper.SetDefault("shell.path", shellPath)
-	viper.SetDefault("shell.args", []string{"-l"})
+	viper.SetDefault("shell.args", shellArgs)
 
 	if debug {
 		viper.SetDefault("debug", true)
