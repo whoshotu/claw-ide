@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go version:*)",
+      "Bash(winget list:*)",
+      "Bash(winget install:*)"
+    ]
+  }
+}
