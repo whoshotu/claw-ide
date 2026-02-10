@@ -10,6 +10,9 @@ export default function Topbar({
   isTerminalOpen,
   gitSummary,
   onOpenCommit,
+  onOpenMemory,
+  memoryCount,
+  memoryProposedCount,
 }) {
   return (
     <div className="topbar">
@@ -46,6 +49,26 @@ export default function Topbar({
             <path d="M7 9.5h4.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </button>
+        {hasProject && (
+          <button
+            className="topbar-icon-btn"
+            onClick={onOpenMemory}
+            title="Project memory"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1.5C4.5 1.5 2.5 3 2.5 5c0 1.2.7 2.3 1.8 3-.2.8-.7 1.5-1.3 2 1.2 0 2.3-.5 3-1.2.3 0 .7.1 1 .1 2.5 0 4.5-1.5 4.5-3.5S9.5 1.5 7 1.5z" stroke="currentColor" strokeWidth="1.1" fill="none" />
+              <circle cx="5" cy="5" r=".7" fill="currentColor" />
+              <circle cx="7" cy="5" r=".7" fill="currentColor" />
+              <circle cx="9" cy="5" r=".7" fill="currentColor" />
+            </svg>
+            {(memoryCount > 0 || memoryProposedCount > 0) && (
+              <span className={`topbar-memory-badge ${memoryProposedCount > 0 ? "has-proposed" : ""}`}>
+                {memoryCount}
+                {memoryProposedCount > 0 && <span className="memory-proposed-dot" />}
+              </span>
+            )}
+          </button>
+        )}
         {hasProject && (
           <button className="topbar-btn" onClick={onNewThread}>
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">

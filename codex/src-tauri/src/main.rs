@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use storage::{Project, Session, Settings};
+use storage::{MemoryItem, Project, Session, Settings};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -89,6 +89,32 @@ fn delete_project_thread(project_id: String, session_id: String) -> Result<(), S
 #[tauri::command]
 fn load_project_thread(project_id: String, session_id: String) -> Option<Session> {
     storage::load_project_thread(&project_id, &session_id)
+}
+
+// --- Project Memory Commands ---
+#[tauri::command]
+fn get_project_memories(project_id: String) -> Vec<MemoryItem> {
+    storage::get_project_memories(&project_id)
+}
+
+#[tauri::command]
+fn save_memory(project_id: String, item: MemoryItem) -> Result<(), String> {
+    storage::save_memory_item(&project_id, &item).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_memory(project_id: String, memory_id: String) -> Result<(), String> {
+    storage::delete_memory_item(&project_id, &memory_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_memory(project_id: String, memory_id: String) -> Option<MemoryItem> {
+    storage::load_memory_item(&project_id, &memory_id)
+}
+
+#[tauri::command]
+fn update_memory_status(project_id: String, memory_id: String, status: String) -> Result<(), String> {
+    storage::update_memory_status(&project_id, &memory_id, &status).map_err(|e| e.to_string())
 }
 
 // --- File Operations ---
@@ -885,6 +911,11 @@ fn main() {
             save_project_thread,
             delete_project_thread,
             load_project_thread,
+            get_project_memories,
+            save_memory,
+            delete_memory,
+            load_memory,
+            update_memory_status,
             read_file,
             write_file,
             list_files,

@@ -11,6 +11,7 @@ import SettingsDialog from "./components/SettingsDialog";
 import DirectoryPanel from "./components/DirectoryPanel";
 import TerminalPanel from "./components/TerminalPanel";
 import CommitDialog from "./components/CommitDialog";
+import MemoryPanel from "./components/MemoryPanel";
 
 
 // Per-model supported reasoning effort levels (from OpenAI docs)
@@ -88,6 +89,9 @@ function clampEffort(effort, model) {
 const COMMANDS = [
   { cmd: "/compact", description: "Compact conversation into a summary checkpoint" },
   { cmd: "/clear", description: "Clear all messages in this thread" },
+  { cmd: "/remember", description: "Save a project memory (e.g., /remember Use pnpm not npm)" },
+  { cmd: "/memorize", description: "Extract all learnings from this chat into structured memories" },
+  { cmd: "/memories", description: "Open project memory panel" },
   { cmd: "/help", description: "Show available commands" },
 ];
 
@@ -161,6 +165,8 @@ export default function App() {
   const [gitLoading, setGitLoading] = useState(false);
   const [gitError, setGitError] = useState("");
   const [showCommitDialog, setShowCommitDialog] = useState(false);
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
+  const [projectMemories, setProjectMemories] = useState([]);
   const [diffModal, setDiffModal] = useState(null);
   const [diffMode, setDiffMode] = useState("unstaged");
   const [diffText, setDiffText] = useState("");
@@ -169,7 +175,11 @@ export default function App() {
   const streamingTextRef = useRef("");
   const streamingModelRef = useRef("");
   const compactingRef = useRef(false);
+  const memorizingRef = useRef(false);
   const activeThreadIdRef = useRef(null);
+  const activeProjectIdRef = useRef(null);
+  const messagesRef = useRef([]);
+  const projectMemoriesRef = useRef([]);
   // Per-thread streaming state: { [sessionId]: { text, model, activity, messages, compacting, isStreaming } }
   const threadStreamsRef = useRef({});
 
@@ -211,10 +221,12 @@ export default function App() {
 
     if (activeProjectId) {
       loadThreads(activeProjectId);
+      loadMemories(activeProjectId);
       const proj = projects.find((p) => p.id === activeProjectId);
       setActiveProject(proj || null);
     } else {
       setThreads([]);
+      setProjectMemories([]);
       setActiveProject(null);
     }
     activeThreadIdRef.current = null;
@@ -226,6 +238,7 @@ export default function App() {
     streamingTextRef.current = "";
     streamingModelRef.current = "";
     compactingRef.current = false;
+    memorizingRef.current = false;
   }, [activeProjectId]);
 
   useEffect(() => {
@@ -405,12 +418,32 @@ export default function App() {
         return;
       }
 
+      if (memorizingRef.current) {
+        memorizingRef.current = false;
+        parseAndSaveMemorizeResponse(content).then((count) => {
+          setMessages((prev) => [
+            ...prev.filter((m) => m.content !== "Analyzing conversation for memories..."),
+            {
+              role: "system",
+              content: count > 0
+                ? `Extracted ${count} memory item${count > 1 ? "s" : ""} from this conversation. Open /memories to review and approve them.`
+                : "No new memories could be extracted from this conversation.",
+              timestamp: Date.now(),
+            },
+          ]);
+        });
+        return;
+      }
+
       setMessages((prev) => [...prev, {
         role: "assistant",
         content,
         timestamp: Date.now(),
         model: modelUsed,
       }]);
+
+      // Auto-extract memories from the completed exchange
+      autoExtractMemories(content);
     });
 
     const unlistenError = listen("opencode-error", (event) => {
@@ -463,6 +496,15 @@ export default function App() {
         return;
       }
 
+      if (memorizingRef.current) {
+        memorizingRef.current = false;
+        setMessages((prev) => [
+          ...prev.filter((m) => m.content !== "Analyzing conversation for memories..."),
+          { role: "system", content: `Memorize failed: ${error}`, timestamp: Date.now() },
+        ]);
+        return;
+      }
+
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: `Error: ${error}`,
@@ -493,12 +535,32 @@ export default function App() {
         return;
       }
 
+      if (memorizingRef.current) {
+        memorizingRef.current = false;
+        parseAndSaveMemorizeResponse(fullText).then((count) => {
+          setMessages((prev) => [
+            ...prev.filter((m) => m.content !== "Analyzing conversation for memories..."),
+            {
+              role: "system",
+              content: count > 0
+                ? `Extracted ${count} memory item${count > 1 ? "s" : ""} from this conversation. Open /memories to review and approve them.`
+                : "No new memories could be extracted from this conversation.",
+              timestamp: Date.now(),
+            },
+          ]);
+        });
+        return;
+      }
+
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: fullText,
         timestamp: Date.now(),
         model: modelUsed,
       }]);
+
+      // Auto-extract memories from the completed exchange
+      autoExtractMemories(fullText);
     });
 
     const unlistenStreamError = listen("stream-error", (event) => {
@@ -511,6 +573,15 @@ export default function App() {
         setMessages((prev) => [
           ...prev,
           { role: "system", content: `Compact failed: ${event.payload.error}`, timestamp: Date.now() },
+        ]);
+        return;
+      }
+
+      if (memorizingRef.current) {
+        memorizingRef.current = false;
+        setMessages((prev) => [
+          ...prev.filter((m) => m.content !== "Analyzing conversation for memories..."),
+          { role: "system", content: `Memorize failed: ${event.payload.error}`, timestamp: Date.now() },
         ]);
         return;
       }
@@ -532,6 +603,11 @@ export default function App() {
       unlistenStreamError.then((fn) => fn());
     };
   }, []);
+
+  // Keep refs in sync with state so event listeners can access current values
+  useEffect(() => { activeProjectIdRef.current = activeProjectId; }, [activeProjectId]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { projectMemoriesRef.current = projectMemories; }, [projectMemories]);
 
   // Auto-save thread when messages change
   useEffect(() => {
@@ -565,6 +641,285 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load threads:", e);
     }
+  }
+
+  async function loadMemories(projectId) {
+    try {
+      const items = await invoke("get_project_memories", { projectId });
+      setProjectMemories(items || []);
+    } catch (e) {
+      console.error("Failed to load memories:", e);
+    }
+  }
+
+  async function saveMemory(item) {
+    if (!activeProjectId) return;
+    try {
+      await invoke("save_memory", { projectId: activeProjectId, item });
+      await loadMemories(activeProjectId);
+    } catch (e) {
+      console.error("Failed to save memory:", e);
+    }
+  }
+
+  async function deleteMemory(memoryId) {
+    if (!activeProjectId) return;
+    try {
+      await invoke("delete_memory", { projectId: activeProjectId, memoryId });
+      await loadMemories(activeProjectId);
+    } catch (e) {
+      console.error("Failed to delete memory:", e);
+    }
+  }
+
+  async function updateMemoryStatus(memoryId, status) {
+    if (!activeProjectId) return;
+    try {
+      await invoke("update_memory_status", { projectId: activeProjectId, memoryId, status });
+      await loadMemories(activeProjectId);
+    } catch (e) {
+      console.error("Failed to update memory status:", e);
+    }
+  }
+
+  /**
+   * Auto-extract memory items from the last conversation exchange.
+   * Runs after each AI response completes. Analyzes both the user's last
+   * message and the assistant's response for memory-worthy patterns like
+   * decisions, conventions, fixes, and tool choices.
+   *
+   * Extracted items are saved as "proposed" so the user can review.
+   * Deduplicates against existing memories by title similarity.
+   */
+  async function autoExtractMemories(assistantContent) {
+    const projId = activeProjectIdRef.current;
+    if (!projId) return;
+
+    const msgs = messagesRef.current;
+    const existingMemories = projectMemoriesRef.current;
+
+    // Find the last user message (the one that triggered this response)
+    const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user");
+    if (!lastUserMsg) return;
+
+    const userText = lastUserMsg.content || "";
+    const aiText = assistantContent || "";
+    const combined = `${userText}\n${aiText}`;
+
+    // Skip short or error responses
+    if (aiText.length < 50 || aiText.startsWith("Error:")) return;
+
+    // Extraction patterns: each returns { type, title, content } or null
+    const extractors = [
+      // Decision patterns in AI response
+      {
+        patterns: [
+          /(?:decided|choosing|going with|will use|let's use|switching to|using)\s+(.{10,80})/i,
+          /(?:the approach|the solution|the fix)\s+(?:is|will be)\s+(.{10,80})/i,
+        ],
+        type: "decision",
+        extract: (match) => ({ title: match[0].trim().slice(0, 80), content: match[0].trim() }),
+      },
+      // Convention patterns
+      {
+        patterns: [
+          /(?:convention|standard|pattern)\s+(?:is|here|in this project)\s*[:.]?\s*(.{10,80})/i,
+          /(?:we always|you should always|always)\s+(.{10,80})/i,
+          /(?:we never|you should never|never)\s+(.{10,80})/i,
+        ],
+        type: "convention",
+        extract: (match) => ({ title: match[0].trim().slice(0, 80), content: match[0].trim() }),
+      },
+      // Fix/mistake patterns in AI response
+      {
+        patterns: [
+          /(?:the (?:bug|issue|problem|error) was|root cause|the fix is|fixed by)\s+(.{10,120})/i,
+          /(?:this happened because|the mistake was|this fails when)\s+(.{10,120})/i,
+        ],
+        type: "mistake",
+        extract: (match) => ({ title: match[0].trim().slice(0, 80), content: match[0].trim() }),
+      },
+      // Tool/dependency choices
+      {
+        patterns: [
+          /(?:installed|added|using|switched to)\s+([\w@/.-]+)\s+(?:package|library|dependency|module|instead)/i,
+        ],
+        type: "decision",
+        extract: (match) => ({
+          title: `Using ${match[1]}`,
+          content: match[0].trim(),
+        }),
+      },
+    ];
+
+    const candidates = [];
+
+    for (const extractor of extractors) {
+      for (const pattern of extractor.patterns) {
+        const match = combined.match(pattern);
+        if (match) {
+          const { title, content } = extractor.extract(match);
+          // Deduplicate: skip if a memory with similar title already exists
+          const isDupe = existingMemories.some((m) => {
+            const existingTitle = (m.title || "").toLowerCase();
+            const newTitle = title.toLowerCase();
+            // Check for significant overlap (>60% of words match)
+            const existingWords = new Set(existingTitle.split(/\s+/));
+            const newWords = newTitle.split(/\s+/);
+            const overlap = newWords.filter((w) => existingWords.has(w)).length;
+            return overlap > newWords.length * 0.6;
+          });
+          if (!isDupe && title.length > 5) {
+            candidates.push({ type: extractor.type, title, content });
+          }
+          break; // One match per extractor is enough
+        }
+      }
+    }
+
+    // Also check for user corrections that weren't caught by the sendMessage heuristic
+    // (e.g., the user said something that only makes sense as a correction in context)
+    const userCorrectionInContext = [
+      /(?:no|wrong),?\s+(?:it should|it's|use|the correct)/i,
+      /(?:that broke|that doesn't work|that's broken|revert)/i,
+    ];
+    for (const pattern of userCorrectionInContext) {
+      if (pattern.test(userText)) {
+        // The AI's response likely contains the correct approach
+        const fixMatch = aiText.match(/(?:instead|correct|should be|fixed|here's the fix)[^.]*\.\s?([^.]{10,100})/i);
+        if (fixMatch) {
+          const title = fixMatch[0].trim().slice(0, 80);
+          const isDupe = existingMemories.some((m) =>
+            (m.title || "").toLowerCase().includes(title.toLowerCase().slice(0, 30))
+          );
+          if (!isDupe) {
+            candidates.push({
+              type: "mistake",
+              title,
+              content: `User reported: "${userText.slice(0, 100)}"\nFix: ${fixMatch[0].trim()}`,
+            });
+          }
+        }
+        break;
+      }
+    }
+
+    // Save extracted candidates as proposed memories
+    if (candidates.length === 0) return;
+
+    // Limit to max 2 extractions per turn to avoid noise
+    const toSave = candidates.slice(0, 2);
+    for (const candidate of toSave) {
+      const item = {
+        id: generateId(),
+        projectId: projId,
+        memoryType: candidate.type,
+        title: candidate.title,
+        content: candidate.content,
+        tags: [],
+        status: "proposed",
+        priority: "medium",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        source: "auto",
+        sourceRef: activeThreadIdRef.current || "",
+        symptoms: "",
+        rootCause: "",
+        fixPattern: "",
+        filesInvolved: [],
+        preventionChecklist: [],
+      };
+      try {
+        await invoke("save_memory", { projectId: projId, item });
+      } catch (e) {
+        console.error("Failed to auto-save memory:", e);
+      }
+    }
+
+    // Refresh memory state so next prompt has the new items
+    await loadMemories(projId);
+  }
+
+  /**
+   * Parse the LLM response from /memorize command and save extracted memories.
+   * Expected format: one item per line as TYPE|PRIORITY|TITLE|CONTENT
+   */
+  async function parseAndSaveMemorizeResponse(responseText) {
+    const projId = activeProjectIdRef.current;
+    if (!projId) return 0;
+
+    const existingMemories = projectMemoriesRef.current;
+    const validTypes = new Set(["constraint", "convention", "decision", "preference", "mistake", "procedure"]);
+    const validPriorities = new Set(["high", "medium", "low"]);
+
+    const lines = responseText.split("\n").filter((l) => l.trim());
+    const saved = [];
+
+    for (const line of lines) {
+      const parts = line.split("|").map((p) => p.trim());
+      if (parts.length < 4) continue;
+
+      const [rawType, rawPriority, title, ...contentParts] = parts;
+      const memoryType = rawType.toLowerCase();
+      const priority = rawPriority.toLowerCase();
+
+      if (!validTypes.has(memoryType)) continue;
+      if (!validPriorities.has(priority)) continue;
+      if (!title || title.length < 3) continue;
+
+      const content = contentParts.join("|").trim() || title;
+
+      // Deduplicate against existing memories
+      const isDupe = existingMemories.some((m) => {
+        const existingTitle = (m.title || "").toLowerCase();
+        const newTitle = title.toLowerCase();
+        const existingWords = new Set(existingTitle.split(/\s+/));
+        const newWords = newTitle.split(/\s+/);
+        const overlap = newWords.filter((w) => existingWords.has(w)).length;
+        return overlap > newWords.length * 0.6;
+      });
+      if (isDupe) continue;
+
+      // Parse mistake-specific fields from content
+      let symptoms = "";
+      let fixPattern = "";
+      if (memoryType === "mistake" && content.includes(" // ")) {
+        const mistakeParts = content.split(" // ");
+        symptoms = mistakeParts[0] || "";
+        fixPattern = mistakeParts.slice(1).join(" // ") || "";
+      }
+
+      const item = {
+        id: generateId(),
+        projectId: projId,
+        memoryType,
+        title: title.length > 80 ? title.slice(0, 80) + "..." : title,
+        content,
+        tags: [],
+        status: "proposed",
+        priority,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        source: "memorize",
+        sourceRef: activeThreadIdRef.current || "",
+        symptoms,
+        rootCause: "",
+        fixPattern,
+        filesInvolved: [],
+        preventionChecklist: [],
+      };
+
+      try {
+        await invoke("save_memory", { projectId: projId, item });
+        saved.push(item);
+      } catch (e) {
+        console.error("Failed to save memorized item:", e);
+      }
+    }
+
+    // Refresh memory state
+    await loadMemories(projId);
+    return saved.length;
   }
 
   async function createProject(directory) {
@@ -735,7 +1090,81 @@ export default function App() {
     }
   }
 
-  function buildHistoryPrompt(msgs, currentContent) {
+  function buildMemoryContext(memories) {
+    if (!memories || memories.length === 0) return "";
+    // Filter out deprecated items
+    const active = memories.filter((m) => m.status !== "deprecated");
+    if (active.length === 0) return "";
+
+    // Priority ordering for type groups
+    const typeOrder = ["constraint", "mistake", "convention", "decision", "preference", "procedure"];
+    const typeLabels = {
+      constraint: "Constraints (MUST follow)",
+      mistake: "Known Mistakes & Gotchas",
+      convention: "Conventions",
+      decision: "Decisions",
+      preference: "Preferences",
+      procedure: "Procedures",
+    };
+    const priorityRank = { high: 0, medium: 1, low: 2 };
+
+    // Sort within each group by priority then recency
+    const sorted = [...active].sort((a, b) => {
+      const typeA = typeOrder.indexOf(a.memoryType) >= 0 ? typeOrder.indexOf(a.memoryType) : 99;
+      const typeB = typeOrder.indexOf(b.memoryType) >= 0 ? typeOrder.indexOf(b.memoryType) : 99;
+      if (typeA !== typeB) return typeA - typeB;
+      const pA = priorityRank[a.priority] ?? 1;
+      const pB = priorityRank[b.priority] ?? 1;
+      if (pA !== pB) return pA - pB;
+      return b.updatedAt - a.updatedAt;
+    });
+
+    // Build the memory block grouped by type
+    const groups = {};
+    for (const item of sorted) {
+      const type = item.memoryType || "preference";
+      if (!groups[type]) groups[type] = [];
+      groups[type].push(item);
+    }
+
+    const STALE_THRESHOLD = 90 * 24 * 60 * 60 * 1000; // 90 days
+    const now = Date.now();
+    let lines = [
+      "The following are project-specific rules, conventions, and lessons learned.",
+      "Follow approved items strictly. Treat proposed items as likely correct but not yet confirmed.",
+      "",
+    ];
+
+    for (const type of typeOrder) {
+      const items = groups[type];
+      if (!items || items.length === 0) continue;
+      lines.push(`## ${typeLabels[type] || type}`);
+      for (const item of items) {
+        const staleTag = (now - item.updatedAt) > STALE_THRESHOLD ? " [stale]" : "";
+        const statusTag = item.status === "proposed" ? " [proposed - pending review]" : " [approved]";
+        let line = `- ${item.title || item.content}${statusTag}${staleTag}`;
+        if (item.memoryType === "mistake") {
+          if (item.filesInvolved && item.filesInvolved.length > 0) {
+            line += ` Files: ${item.filesInvolved.join(", ")}`;
+          }
+          if (item.preventionChecklist && item.preventionChecklist.length > 0) {
+            line += `\n  Prevention: ${item.preventionChecklist.join("; ")}`;
+          }
+        }
+        lines.push(line);
+      }
+      lines.push("");
+    }
+
+    let block = lines.join("\n").trim();
+    // Token budget: cap at ~2000 chars
+    if (block.length > 2000) {
+      block = block.slice(0, 1997) + "...";
+    }
+    return `<project_memory>\n${block}\n</project_memory>`;
+  }
+
+  function buildHistoryPrompt(msgs, currentContent, memories) {
     // Find last compact checkpoint
     const lastCompactIdx = msgs.findLastIndex((m) => m.role === "compact");
     const relevant = lastCompactIdx >= 0 ? msgs.slice(lastCompactIdx) : msgs;
@@ -749,8 +1178,12 @@ export default function App() {
       .filter(Boolean)
       .join("\n\n");
 
-    if (!history) return currentContent;
-    return `<conversation_history>\n${history}\n</conversation_history>\n\nUser: ${currentContent}`;
+    const memoryBlock = buildMemoryContext(memories);
+    const parts = [];
+    if (memoryBlock) parts.push(memoryBlock);
+    if (history) parts.push(`<conversation_history>\n${history}\n</conversation_history>`);
+    parts.push(`User: ${currentContent}`);
+    return parts.join("\n\n");
   }
 
   async function sendMessage(content) {
@@ -774,6 +1207,139 @@ export default function App() {
           ...prev,
           { role: "system", content: `Available commands:\n${helpText}`, timestamp: Date.now() },
         ]);
+        return;
+      }
+
+      if (cmd === "/remember") {
+        const text = trimmed.slice("/remember ".length).trim();
+        if (!text) {
+          setMessages((prev) => [
+            ...prev,
+            { role: "system", content: "Usage: /remember <what to remember>\nExample: /remember Use pnpm, not npm", timestamp: Date.now() },
+          ]);
+          return;
+        }
+        const item = {
+          id: generateId(),
+          projectId: activeProjectId,
+          memoryType: "preference",
+          title: text.length > 80 ? text.slice(0, 80) + "..." : text,
+          content: text,
+          tags: [],
+          status: "approved",
+          priority: "medium",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          source: "user",
+          sourceRef: activeThreadId || "",
+          symptoms: "",
+          rootCause: "",
+          fixPattern: "",
+          filesInvolved: [],
+          preventionChecklist: [],
+        };
+        await saveMemory(item);
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", content: `Saved to project memory: "${text}"`, timestamp: Date.now() },
+        ]);
+        return;
+      }
+
+      if (cmd === "/memories") {
+        setShowMemoryPanel(true);
+        return;
+      }
+
+      if (cmd === "/memorize") {
+        if (messages.length < 2) {
+          setMessages((prev) => [
+            ...prev,
+            { role: "system", content: "Not enough conversation to memorize. Have a chat first, then use /memorize.", timestamp: Date.now() },
+          ]);
+          return;
+        }
+
+        memorizingRef.current = true;
+
+        // Build the full conversation text
+        const chatLines = messages
+          .map((m) => {
+            if (m.role === "compact") return `[Previous Summary]: ${m.content}`;
+            if (m.role === "system") return null;
+            return `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`;
+          })
+          .filter(Boolean)
+          .join("\n\n");
+
+        const memorizePrompt =
+          "Analyze the following conversation and extract ALL meaningful learnings, decisions, conventions, mistakes, preferences, and procedures into structured memory items.\n\n" +
+          "For each item, output ONE line in this exact format:\n" +
+          "TYPE|PRIORITY|TITLE|CONTENT\n\n" +
+          "TYPE must be one of: constraint, convention, decision, preference, mistake, procedure\n" +
+          "PRIORITY must be one of: high, medium, low\n\n" +
+          "Guidelines for each type:\n" +
+          "- constraint: Rules that MUST be followed (e.g., \"Always use TypeScript strict mode\")\n" +
+          "- convention: Code style, naming, architecture patterns observed or established\n" +
+          "- decision: Architectural or technical choices made with rationale\n" +
+          "- preference: User/team expectations, likes, dislikes\n" +
+          "- mistake: Bugs found, gotchas, lessons learned from errors. For mistakes, append symptoms and fix in CONTENT separated by ' // '\n" +
+          "- procedure: How work gets done (build steps, deploy process, review flow)\n\n" +
+          "Extract as many relevant items as you can find. Be specific and actionable. Skip trivial or one-off items.\n" +
+          "Output ONLY the formatted lines, nothing else. No preamble, no summary, no markdown.\n\n" +
+          "CONVERSATION:\n" + chatLines;
+
+        setMessages((prev) => [
+          ...prev,
+          { role: "system", content: "Analyzing conversation for memories...", timestamp: Date.now() },
+        ]);
+        setIsStreaming(true);
+        setStreamingText("");
+        setStreamingActivity([]);
+        streamingTextRef.current = "";
+
+        let threadId = activeThreadId || generateId();
+        if (!activeThreadId) {
+          activeThreadIdRef.current = threadId;
+          setActiveThreadId(threadId);
+        }
+
+        if (opencodeAvailable && activeProject?.directory) {
+          try {
+            await invoke("send_opencode", {
+              request: {
+                prompt: memorizePrompt,
+                projectDir: activeProject.directory,
+                sessionId: threadId,
+                settings,
+              },
+            });
+          } catch (e) {
+            memorizingRef.current = false;
+            setIsStreaming(false);
+            setMessages((prev) => [
+              ...prev,
+              { role: "system", content: `Memorize failed: ${e}`, timestamp: Date.now() },
+            ]);
+          }
+        } else {
+          try {
+            await invoke("send_message", {
+              request: {
+                messages: [{ role: "user", content: memorizePrompt }],
+                settings,
+                sessionId: threadId,
+              },
+            });
+          } catch (e) {
+            memorizingRef.current = false;
+            setIsStreaming(false);
+            setMessages((prev) => [
+              ...prev,
+              { role: "system", content: `Memorize failed: ${e}`, timestamp: Date.now() },
+            ]);
+          }
+        }
         return;
       }
 
@@ -883,6 +1449,37 @@ export default function App() {
       verbosity: settings.verbosity,
     };
 
+    // Implicit memory capture: detect user corrections
+    const correctionPatterns = [
+      /no,?\s+(that's not|that is not|don't|do not|stop|wrong|incorrect)/i,
+      /actually,?\s+(we|you should|use|always|never)/i,
+      /in this (project|repo|codebase),?\s+we/i,
+      /please (always|never|don't|stop)/i,
+    ];
+    if (activeProjectId && correctionPatterns.some((p) => p.test(trimmed))) {
+      const proposedItem = {
+        id: generateId(),
+        projectId: activeProjectId,
+        memoryType: "preference",
+        title: trimmed.length > 80 ? trimmed.slice(0, 80) + "..." : trimmed,
+        content: trimmed,
+        tags: [],
+        status: "proposed",
+        priority: "medium",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        source: "implicit",
+        sourceRef: activeThreadId || threadId || "",
+        symptoms: "",
+        rootCause: "",
+        fixPattern: "",
+        filesInvolved: [],
+        preventionChecklist: [],
+      };
+      // Fire-and-forget: don't block the message send
+      saveMemory(proposedItem);
+    }
+
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setIsStreaming(true);
@@ -911,7 +1508,7 @@ export default function App() {
     // Use opencode CLI if available and model is compatible
     if (shouldUseOpencode) {
       try {
-        const fullPrompt = buildHistoryPrompt(messages, trimmed);
+        const fullPrompt = buildHistoryPrompt(messages, trimmed, projectMemories);
         await invoke("send_opencode", {
           request: {
             prompt: fullPrompt,
@@ -954,19 +1551,30 @@ export default function App() {
       // Fallback to direct LLM streaming — pass full message array for native context
       const lastCompactIdx = newMessages.findLastIndex((m) => m.role === "compact");
       let apiMessages;
+
+      // Inject memory as system message for direct API path
+      const memoryBlock = buildMemoryContext(projectMemories);
+      const memorySystemMsg = memoryBlock
+        ? [{ role: "system", content: memoryBlock }]
+        : [];
+
       if (lastCompactIdx >= 0) {
         const compactMsg = newMessages[lastCompactIdx];
         const afterCompact = newMessages.slice(lastCompactIdx + 1);
         apiMessages = [
+          ...memorySystemMsg,
           { role: "system", content: `Previous conversation summary:\n${compactMsg.content}` },
           ...afterCompact
             .filter((m) => m.role === "user" || m.role === "assistant")
             .map((m) => ({ role: m.role, content: m.content })),
         ];
       } else {
-        apiMessages = newMessages
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role, content: m.content }));
+        apiMessages = [
+          ...memorySystemMsg,
+          ...newMessages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content })),
+        ];
       }
       try {
         await invoke("send_message", {
@@ -1294,6 +1902,9 @@ export default function App() {
           isTerminalOpen={showTerminal}
           gitSummary={gitSummary}
           onOpenCommit={() => setShowCommitDialog(true)}
+          onOpenMemory={() => setShowMemoryPanel(true)}
+          memoryCount={projectMemories.filter((m) => m.status !== "deprecated").length}
+          memoryProposedCount={projectMemories.filter((m) => m.status === "proposed").length}
         />
         <div className="content-stack">
           {hasMessages ? (
@@ -1381,6 +1992,16 @@ export default function App() {
           onCommit={handleCommit}
           onClose={() => setShowCommitDialog(false)}
           onGenerateMessage={generateCommitMessage}
+        />
+      )}
+      {showMemoryPanel && activeProjectId && (
+        <MemoryPanel
+          memories={projectMemories}
+          onSave={saveMemory}
+          onDelete={deleteMemory}
+          onUpdateStatus={updateMemoryStatus}
+          onClose={() => setShowMemoryPanel(false)}
+          projectName={activeProject?.name || ""}
         />
       )}
       {showSettings && (

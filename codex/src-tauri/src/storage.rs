@@ -71,6 +71,49 @@ pub struct Session {
     pub project_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryItem {
+    pub id: String,
+    pub project_id: String,
+    #[serde(default)]
+    pub memory_type: String,
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_status")]
+    pub status: String,
+    #[serde(default = "default_priority")]
+    pub priority: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_ref: String,
+    // Mistake-specific fields
+    #[serde(default)]
+    pub symptoms: String,
+    #[serde(default)]
+    pub root_cause: String,
+    #[serde(default)]
+    pub fix_pattern: String,
+    #[serde(default)]
+    pub files_involved: Vec<String>,
+    #[serde(default)]
+    pub prevention_checklist: Vec<String>,
+}
+
+fn default_status() -> String {
+    "approved".to_string()
+}
+
+fn default_priority() -> String {
+    "medium".to_string()
+}
+
 fn data_dir() -> PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("opencodex-app")
@@ -242,4 +285,68 @@ pub fn load_project_thread(project_id: &str, session_id: &str) -> Option<Session
         }
     }
     None
+}
+
+// --- Project Memory ---
+fn memory_dir(project_id: &str) -> PathBuf {
+    projects_dir().join(project_id).join("memory")
+}
+
+fn ensure_memory_dir(project_id: &str) {
+    let _ = fs::create_dir_all(memory_dir(project_id));
+}
+
+pub fn get_project_memories(project_id: &str) -> Vec<MemoryItem> {
+    ensure_memory_dir(project_id);
+    let dir = memory_dir(project_id);
+    let mut items: Vec<MemoryItem> = Vec::new();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if let Ok(item) = serde_json::from_str::<MemoryItem>(&content) {
+                        items.push(item);
+                    }
+                }
+            }
+        }
+    }
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items
+}
+
+pub fn save_memory_item(project_id: &str, item: &MemoryItem) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_memory_dir(project_id);
+    let path = memory_dir(project_id).join(format!("{}.json", item.id));
+    let content = serde_json::to_string_pretty(item)?;
+    fs::write(path, content)?;
+    Ok(())
+}
+
+pub fn load_memory_item(project_id: &str, memory_id: &str) -> Option<MemoryItem> {
+    let path = memory_dir(project_id).join(format!("{}.json", memory_id));
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            return serde_json::from_str(&content).ok();
+        }
+    }
+    None
+}
+
+pub fn delete_memory_item(project_id: &str, memory_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = memory_dir(project_id).join(format!("{}.json", memory_id));
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+pub fn update_memory_status(project_id: &str, memory_id: &str, status: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(mut item) = load_memory_item(project_id, memory_id) {
+        item.status = status.to_string();
+        item.updated_at = chrono::Utc::now().timestamp_millis();
+        save_memory_item(project_id, &item)?;
+    }
+    Ok(())
 }
