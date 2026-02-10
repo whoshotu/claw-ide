@@ -14,7 +14,8 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Default)]
 pub struct OpenCodeState {
-    children: Arc<Mutex<HashMap<String, tokio::process::Child>>>,
+    /// Maps session_id → oneshot sender that signals cancellation.
+    cancellers: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
 }
 
 /// A streaming event parsed from opencode's stderr JSON lines
@@ -265,9 +266,12 @@ pub async fn run_opencode(
     let stderr = child.stderr.take();
     let stdout = child.stdout.take();
 
+    // Create a oneshot channel for cancellation. The sender is stored in the
+    // map; cancel_opencode drops it (or sends) to signal this task.
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     {
-        let mut guard = state.children.lock().await;
-        guard.insert(session_id.clone(), child);
+        let mut guard = state.cancellers.lock().await;
+        guard.insert(session_id.clone(), cancel_tx);
     }
 
     let app_progress = app.clone();
@@ -323,31 +327,52 @@ pub async fn run_opencode(
         output
     });
 
-    let status = {
-        let mut guard = state.children.lock().await;
-        if let Some(child) = guard.get_mut(&session_id) {
-            child.wait().await
-        } else {
-            return Ok(());
+    // Wait for the child to exit OR cancellation signal — no locks held.
+    let cancelled = tokio::select! {
+        result = child.wait() => {
+            // Process exited naturally — handle below
+            let _ = result; // status handled after joining readers
+            false
+        }
+        _ = cancel_rx => {
+            // Cancellation requested — kill the process
+            let _ = child.kill().await;
+            true
         }
     };
 
+    // Remove from cancellers map
     {
-        let mut guard = state.children.lock().await;
+        let mut guard = state.cancellers.lock().await;
         guard.remove(&session_id);
     }
+
+    // If cancelled, emit an error event and return early
+    if cancelled {
+        // Wait for readers to finish (pipes close after kill)
+        let _ = stderr_handle.await;
+        let _ = stdout_handle.await;
+        let _ = app.emit("opencode-error", OpenCodeError {
+            error: "Cancelled".to_string(),
+            session_id,
+        });
+        return Ok(());
+    }
+
+    // Collect the final exit status by waiting once more (already exited)
+    let status = child.try_wait().map_err(|e| format!("Failed to get exit status: {}", e))?;
 
     let stderr_output = stderr_handle.await.unwrap_or_default();
     let output = stdout_handle.await.unwrap_or_default();
 
     match status {
-        Ok(exit) if exit.success() => {
+        Some(exit) if exit.success() => {
             let _ = app.emit("opencode-done", OpenCodeDone {
                 output,
                 session_id,
             });
         }
-        Ok(exit) => {
+        Some(exit) => {
             let mut err_msg = format!(
                 "opencode exited with code: {}.",
                 exit.code().unwrap_or(-1)
@@ -363,9 +388,10 @@ pub async fn run_opencode(
                 session_id,
             });
         }
-        Err(e) => {
+        None => {
+            // Should not happen since select! waited for exit
             let _ = app.emit("opencode-error", OpenCodeError {
-                error: format!("Failed to wait for opencode: {}", e),
+                error: "opencode process state unknown".to_string(),
                 session_id,
             });
         }
@@ -375,8 +401,9 @@ pub async fn run_opencode(
 }
 
 pub async fn cancel_opencode(state: &OpenCodeState, session_id: &str) {
-    let mut guard = state.children.lock().await;
-    if let Some(mut child) = guard.remove(session_id) {
-        let _ = child.kill().await;
+    let mut guard = state.cancellers.lock().await;
+    if let Some(tx) = guard.remove(session_id) {
+        // Send cancellation signal; run_opencode's select! will kill the child.
+        let _ = tx.send(());
     }
 }

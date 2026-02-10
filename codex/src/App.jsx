@@ -415,6 +415,10 @@ export default function App() {
 
     const unlistenError = listen("opencode-error", (event) => {
       const { error, sessionId } = event.payload;
+
+      // Ignore cancellation events — the frontend already handled the UI reset
+      if (error === "Cancelled") return;
+
       const isActive = sessionId === activeThreadIdRef.current;
 
       if (!isActive) {
