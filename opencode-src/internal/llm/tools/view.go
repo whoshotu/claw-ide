@@ -32,7 +32,7 @@ type ViewResponseMetadata struct {
 
 const (
 	ViewToolName     = "view"
-	MaxReadSize      = 250 * 1024
+	MaxReadSize      = 2 * 1024 * 1024 // 2 MB soft limit — files above this are still readable via offset/limit
 	DefaultReadLimit = 2000
 	MaxLineLength    = 2000
 	viewDescription  = `File viewing tool that reads and displays the contents of files with line numbers, allowing you to examine code, logs, or text data.
@@ -55,16 +55,16 @@ FEATURES:
 - Suggests similar file names when the requested file isn't found
 
 LIMITATIONS:
-- Maximum file size is 250KB
-- Default reading limit is 2000 lines
+- Files up to 2MB can be read directly; larger files require offset/limit chunking
+- Default reading limit is 2000 lines per call
 - Lines longer than 2000 characters are truncated
 - Cannot display binary files or images
-- Images can be identified but not displayed
 
 TIPS:
 - Use with Glob tool to first find files you want to view
 - For code exploration, first use Grep to find relevant files, then View to examine them
-- When viewing large files, use the offset parameter to read specific sections`
+- For large files, read in chunks: start with offset=0, limit=500, then increase offset
+- Use Grep first to find the relevant line numbers, then View with offset to jump there`
 )
 
 func NewViewTool(lspClients map[string]*lsp.Client) BaseTool {
@@ -150,10 +150,12 @@ func (v *viewTool) Run(ctx context.Context, call ToolCall) (ToolResponse, error)
 		return NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
 	}
 
-	// Check file size
+	// For very large files, enforce use of offset/limit to read in chunks
 	if fileInfo.Size() > MaxReadSize {
-		return NewTextErrorResponse(fmt.Sprintf("File is too large (%d bytes). Maximum size is %d bytes",
-			fileInfo.Size(), MaxReadSize)), nil
+		return NewTextErrorResponse(fmt.Sprintf(
+			"File is very large (%d bytes, %.1f MB). Use the 'offset' and 'limit' parameters to read it in chunks. "+
+				"For example, start with offset=0 and limit=500, then increment the offset to read more.",
+			fileInfo.Size(), float64(fileInfo.Size())/(1024*1024))), nil
 	}
 
 	// Set default limit if not provided

@@ -44,6 +44,17 @@ Copy-Item opencode.exe "$env:USERPROFILE\.local\bin\opencode.exe"
 
 Requires **Go 1.24+**. Make sure the binary location is in your `PATH`.
 
+> **Note:** The bundled `opencode` CLI supports reading files up to 2 MB directly and larger files via chunked offset/limit pagination.
+
+## Windows Fixes
+
+This build includes several Windows-specific improvements:
+
+- Hidden console windows — git and CLI processes no longer flash black cmd windows
+- Reduced polling — git status checks every 15s (was 5s), directory refresh every 10s (was 4s)
+- Windows binary discovery — uses `where` instead of `which`, searches Windows-specific paths
+- Large file support — file viewer raised from 250 KB to 2 MB with chunked reading for bigger files
+
 ## Build from Source
 
 ### Requirements
