@@ -1,0 +1,6 @@
+{
+  "name": "Claw IDE",
+  "applicationName": "claw-ide",
+  "extensionsGallery": "https://open-vsx.org/vscode/gallery",
+  "dataFolderName": ".claw-ide"
+}
