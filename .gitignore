@@ -5,3 +5,28 @@ codex/src-tauri/gen/
 .opencode/*.db
 .opencode/*.db-shm
 .opencode/*.db-wal
+
+# Dependencies and build output
+node_modules/
+out/
+dist/
+build/
+.build/
+
+# Local runtime state / databases
+*.db
+*.db-shm
+*.db-wal
+
+# Local agent settings (personal, not shared)
+.claude/settings.local.json
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS / logs
+.DS_Store
+Thumbs.db
+*.log
