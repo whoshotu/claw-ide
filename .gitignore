@@ -1,0 +1,25 @@
+# JavaScript / Vite
+node_modules/
+dist/
+.vite/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.local.json
+
+# Local runtime state
+*.db
+*.db-shm
+*.db-wal
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
