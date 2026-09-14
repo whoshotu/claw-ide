@@ -1,2 +1,7 @@
 **/*.js
 node_modules/
+codex/src-tauri/target/
+codex/src-tauri/gen/
+.opencode/*.db
+.opencode/*.db-shm
+.opencode/*.db-wal
