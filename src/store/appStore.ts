@@ -29,6 +29,19 @@ export interface ClawVersion {
   isRecommended: boolean;
 }
 
+export type ApiProvider = "ollama" | "openai" | "openrouter" | "anthropic-compatible" | "gemini" | "xai" | "deepseek" | "openai-compatible";
+export type WorkbenchView = "explorer" | "search" | "source-control" | "run" | "extensions";
+export type AgentBackend = "provider" | "claw-code" | "clawbot";
+export type AgentRuntimeStatus = "starting" | "ready" | "unavailable" | "degraded";
+
+export interface AgentTeamStatus {
+  clawCode: AgentRuntimeStatus;
+  clawBot: AgentRuntimeStatus;
+  apiBackup: AgentRuntimeStatus;
+  activeBackend: AgentBackend;
+  message: string;
+}
+
 interface AppState {
   // File tree state
   currentDirectory: string;
@@ -44,6 +57,9 @@ interface AppState {
   isStreaming: boolean;
   permissionMode: string;
   model: string;
+  apiProvider: ApiProvider;
+  apiBaseUrl: string;
+  apiKey: string;
 
   // Claw state
   clawPath: string | null;
@@ -54,8 +70,12 @@ interface AppState {
   // UI state
   leftPanelWidth: number;
   rightPanelWidth: number;
+  leftView: WorkbenchView;
+  agentBackend: AgentBackend;
+  agentTeam: AgentTeamStatus;
 
   // Actions
+  setCurrentDirectory: (directory: string) => void;
   setFiles: (files: FileEntry[]) => void;
   toggleDirectory: (path: string) => void;
   openFile: (path: string, content: string) => void;
@@ -72,7 +92,13 @@ interface AppState {
   setApiKeyConfigured: (configured: boolean) => void;
   setPermissionMode: (mode: string) => void;
   setModel: (model: string) => void;
+  setApiProvider: (provider: ApiProvider) => void;
+  setApiBaseUrl: (baseUrl: string) => void;
+  setApiKey: (apiKey: string) => void;
   setPanelWidth: (panel: "left" | "right", width: number) => void;
+  setLeftView: (view: WorkbenchView) => void;
+  setAgentBackend: (backend: AgentBackend) => void;
+  setAgentTeam: (team: AgentTeamStatus) => void;
 }
 
 const getLanguageFromExtension = (extension: string): string => {
@@ -108,6 +134,9 @@ export const useAppStore = create<AppState>((set) => ({
   isStreaming: false,
   permissionMode: "workspace-write",
   model: "qwen3:8b",
+  apiProvider: "ollama",
+  apiBaseUrl: "http://127.0.0.1:11434",
+  apiKey: "",
 
   clawPath: null,
   clawVersion: null,
@@ -116,8 +145,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   leftPanelWidth: 250,
   rightPanelWidth: 350,
+  leftView: "explorer",
+  agentBackend: "provider",
+  agentTeam: {
+    clawCode: "starting",
+    clawBot: "starting",
+    apiBackup: "starting",
+    activeBackend: "provider",
+    message: "Starting agent team…",
+  },
 
   // Actions
+  setCurrentDirectory: (directory) => set({ currentDirectory: directory }),
   setFiles: (files) => set({ files }),
 
   toggleDirectory: (path) =>
@@ -202,8 +241,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   setModel: (model) => set({ model }),
 
+  setApiProvider: (provider) => set({ apiProvider: provider }),
+
+  setApiBaseUrl: (baseUrl) => set({ apiBaseUrl: baseUrl }),
+
+  setApiKey: (apiKey) => set({ apiKey }),
+
   setPanelWidth: (panel, width) =>
     set(() => ({
       [panel === "left" ? "leftPanelWidth" : "rightPanelWidth"]: width,
     })),
+
+  setLeftView: (view) => set({ leftView: view }),
+  setAgentBackend: (backend) => set({ agentBackend: backend }),
+  setAgentTeam: (agentTeam) => set({ agentTeam }),
 }));

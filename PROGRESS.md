@@ -1,162 +1,154 @@
-# Claw IDE - Progress & Next Steps
+# Claw IDE Progress
 
-## Current Status
+## Current release
 
-### What's Built ✅
+**Version:** 1.1.15
 
-**Backend (Rust/Tauri):**
-- `src-tauri/src/commands.rs` - All Tauri commands:
-  - `get_current_directory` - Get current working directory
-  - `read_directory` - List files in directory
-  - `read_file` / `write_file` - File operations
-  - `find_claw_binary` - Locate claw CLI (config → PATH)
-  - `check_claw_version` - Version handshake (parses "Version X.Y.Z")
-  - `spawn_claw` / `kill_claw_process` - Run claw CLI
-- `src-tauri/src/lib.rs` - Logging setup with tracing + crash handler
-- Config file: `~/.config/claw-ide/config.toml` (already created)
+The app is a Tauri 2.x + React + Monaco desktop IDE with local file editing,
+agent-assisted changes, provider settings, terminal access, and a lightweight
+VS Code-style workbench.
 
-**Frontend (React/TypeScript):**
-- `src/App.tsx` - Main 3-panel layout
-- `src/components/FileTree.tsx` - File explorer
-- `src/components/EditorPanel.tsx` - Monaco editor with tabs
-- `src/components/ChatPanel.tsx` - AI chat panel
-- `src/components/StatusBar.tsx` - Status bar
-- `src/store/appStore.ts` - Zustand state management
-- `src/index.css` - Dark theme styling
+## Completed phases
 
-### Known Issues ⚠️
+### Phase 1: Core workbench ✅
 
-1. **Tauri IPC not connecting in dev mode**: The frontend loads from Vite (localhost:1420) but `window.__TAURI_INTERNALS__` isn't injected, so `invoke()` fails.
+- Activity bar views for Explorer, Search, Source Control, Run, and Extensions.
+- Command palette with `Ctrl+Shift+P` / `Cmd+Shift+P`.
+- Empty-on-start Explorer with local folder selection and new-folder creation.
 
-   **Root cause**: Using `devUrl` in tauri.conf.json bypasses Tauri's webview.
+### Phase 2: Editor workbench ✅
 
-   **Fix options**:
-   - Option A: Build production (`npm run build` + `npm run tauri build`)
-   - Option B: Fix dev server config (requires more research)
+- Monaco editing with dirty-file tracking.
+- Save, Save All, close-active-editor, and dirty-close confirmation.
+- Local file reads and writes through Tauri commands.
+- Review-first agent edit proposals with Apply and Reject actions.
 
----
+### Phase 3: Developer tools ✅
 
-## Quick Start (On Your Machine)
+- Run view with frontend build/typecheck, Rust check, and test commands.
+- Basic Python `pdb` and JavaScript Node inspector launchers.
+- Integrated local terminal for interactive commands.
+- Version bumped to 1.1.5 after the internet provider, trusted-host, File menu,
+  and editor zoom updates.
+
+### Phase 4: Search and navigation ✅
+
+- Recursive workspace text search from the Search activity view.
+- Optional filename filtering.
+- Search results include file path, line number, and matching text.
+- Clicking a result opens the file in Monaco.
+- Search skips hidden and generated dependency/build directories.
+- Search is capped at 500 results to keep the UI responsive.
+
+## Validation status
+
+The following checks currently pass:
 
 ```bash
-cd ~/Documents/Antigravity/claw-ide
-
-# Install deps (done)
-npm install
-
-# Build for production
 npm run build
-npm run tauri build
-
-# Or try dev again
-npm run tauri dev
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
----
+`npm test -- --run` executes correctly but currently reports that no test files
+are present.
 
-## Remaining Tasks
+## Known limitations
 
-### P0 - Must Fix Before MVP Works
-1. [ ] Get Tauri IPC working (build prod or fix config)
-2. [ ] Test file tree - click file opens in editor
-3. [ ] Test editor - can edit and save (Ctrl+S)
-4. [ ] Test chat - send prompt, get response from claw
-5. [ ] Test version warning - shows "v0.1.0 detected"
+- Debug launchers are basic process commands, not full breakpoint/variable
+  debugging.
+- Run tasks and terminal commands use one-shot Tauri execution; persistent
+  streaming process sessions are not implemented yet.
+- Extensions are still a view placeholder. Source Control now shows Git status
+  and a diff summary.
+- Search is literal text search rather than regular-expression or symbol search.
+- Search results open the file but do not yet scroll Monaco directly to the
+  matched line.
 
-### P1 - Polish
-1. [ ] Add more file type icons
-2. [ ] Fix version warning - currently shows "outdated" (0.1.0 < 0.15.0)
-3. [ ] Test terminal (Ctrl+`)
+## Next phase
 
-### P2 - Future Features
-1. [ ] Session management (save/resume)
-2. [ ] Settings panel
-3. [ ] MCP tool integration
+### Phase 5: Persistent developer sessions 🚧
 
----
+- Persistent terminal and debug processes with streaming output and Stop controls.
+- Existing one-shot checks remain available for build/typecheck/test commands.
+- Structured compiler diagnostics and source-control integration remain planned.
+- Search result line-targeted navigation remains planned.
 
-## Project Structure
+### Phase 6: Workbench architecture correction 🚧
 
-```
-claw-ide/
-├── src/                      # React frontend
-│   ├── App.tsx              # Main layout
-│   ├── components/          # UI components
-│   │   ├── FileTree.tsx
-│   │   ├── EditorPanel.tsx
-│   │   ├── ChatPanel.tsx
-│   │   └── StatusBar.tsx
-│   ├── store/
-│   │   └── appStore.ts     # Zustand state
-│   └── index.css
-├── src-tauri/               # Rust backend
-│   ├── src/
-│   │   ├── main.rs
-│   │   ├── lib.rs          # Logging setup
-│   │   └── commands.rs    # Tauri commands
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── package.json
-├── tsconfig.json
-└── README.md
-```
+- Left activity-bar views are independent from the right Chat panel.
+- Chat remains visible on the right while Explorer, Search, Run, Source Control,
+  and Extensions change on the left.
+- Settings open from the top menu in a modal instead of taking over a sidebar.
+- Chat exposes API Provider, ClawCode runtime, and ClawBot/OpenClaw runtime
+  choices with explicit availability status.
+- Full conversational bridges for the ClawCode CLI and OpenClaw gateway remain
+  planned; the UI does not pretend those bridges exist.
 
----
+## Integration boundary
 
-## Config File
+ClawCode and ClawBot/OpenClaw are still part of the project. ClawCode is
+represented by the local `claw` runtime discovery command, while ClawBot is
+represented by the local `openclaw` gateway discovery command. Their binaries
+can still be launched through the terminal and existing backend commands.
+Direct conversational transport into the Chat panel is the remaining
+integration task.
 
-`~/.config/claw-ide/config.toml`:
-```toml
-[claw]
-binary_path = "/path/to/claw"
-default_model = "sonnet"
-default_permission = "workspace-write"
+### Phase 7: Agent workbench and source control ✅
 
-[editor]
-font_size = 14
-tab_size = 4
-theme = "dark"
-```
+- Source Control shows the current Git branch, changed files, and diff summary.
+- Git actions are read-only for safety; staging and commits remain planned.
+- Agent context still includes the active file and workspace. Diagnostics,
+  search results, Git diffs, and multi-file proposals are the next context
+  expansion.
 
----
+### Phase 8: Agent safety and UI/UX 🚧
 
-## Testing Checklist
+- Raw `<dots_function_call>` tool markup is no longer displayed as chat content.
+- Model-requested terminal commands appear as explicit approval cards.
+- Commands run only after the user chooses **Allow once**.
+- Chat now has a clearer header, agent status, empty state, message hierarchy,
+  tool-result styling, and clear action.
+- Full provider-native tool schemas and multi-step tool continuation remain
+  planned; the current safety layer handles the XML tool format defensively.
 
-- [ ] App launches without errors
-- [ ] File tree shows project files
-- [ ] Click file → opens in Monaco editor
-- [ ] Edit file → dirty indicator (dot) appears
-- [ ] Ctrl+S → saves file
-- [ ] Chat panel shows "claw not configured" or version
-- [ ] Send message → claw responds
-- [ ] Abort button stops claw process
+### Phase 9: Agent harness foundation ✅
 
----
+- Startup agent-team health check is wired into Tauri initialization.
+- Chat shows ClawCode, ClawBot, and API-backup availability.
+- The API provider is selected as a visible degraded-mode backup when local
+  runtimes are unavailable.
+- ClawCode is actively probed with `claw --version` and is reported ready when
+  its supported CLI adapter is available.
+- Runtime discovery checks common user install locations as well as PATH, so
+  startup health is consistent when Claw IDE is launched from the desktop.
+- OpenClaw startup is self-managed: Claw IDE starts and verifies the local
+  gateway when the installed runtime is not already running.
+- The Chat panel includes a manual health refresh action.
+- OpenClaw is marked ready only when `openclaw gateway status` exits successfully;
+  an installed but unhealthy gateway is shown as degraded.
+- ClawCode does not run as a persistent ACP daemon because its documented ACP
+  command is still a status alias; selected messages start one-shot CLI runs.
 
-## Next Steps
+### Phase 10: Protocol adapters and coordination boundary 🚧
 
-1. **Try building for production:**
-   ```bash
-   npm run build
-   npm run tauri build
-   ```
-   Then run the built app.
+- ClawCode now routes through its supported JSON one-shot prompt surface.
+- OpenClaw now routes through the documented `openclaw acp` stdio bridge.
+- The Chat panel sends selected non-provider requests through the corresponding
+  adapter and reports adapter failures explicitly.
+- Dynamic role handoffs, shared multi-agent task state, and automatic runtime
+  process supervision remain planned for when those protocols are available.
 
-2. **If that works**, MVP is done!
+Version 1.1.15 records completion of the adapter routing milestone, the
+OpenClaw ACP stream parsing fix. Dynamic
+role handoffs remain gated on supported runtime contracts.
 
-3. **If dev mode issues persist**, the fix is to either:
-   - Use production build
-   - Or fix the `devUrl` vs embedded dev server issue in Tauri 2.x
+### Phase 11: Provider environment and verification 🚧
 
----
-
-## Validation Gates (From Plan)
-
-| Phase | Gate | Status |
-|-------|------|--------|
-| P0 | Project builds | ✅ Backend compiles |
-| P1 | File tree + layout | ✅ 3 panels render |
-| P2 | Monaco editor | ✅ Editor loads |
-| P3 | Claw integration | ⚠️ IPC issue |
-
-Once IPC works → MVP complete!
+- Settings detects supported terminal environment variables without exposing
+  secret values.
+- User-confirmed environment import writes provider credentials through the
+  existing local settings path.
+- Provider choices include OpenRouter, OpenAI, OpenAI-compatible,
+  Anthropic-compatible, Gemini-compatible, xAI-compatible, DeepSeek-compatible,
+  and Ollama.
+- A live verification action reports real connection status and latency.

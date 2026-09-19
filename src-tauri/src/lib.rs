@@ -59,11 +59,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_current_directory,
             commands::read_directory,
             commands::read_file,
+            commands::git_status,
             commands::write_file,
             commands::find_claw_binary,
             commands::check_claw_version,
@@ -71,8 +73,22 @@ pub fn run() {
             commands::kill_claw_process,
             commands::spawn_openclaw,
             commands::find_openclaw_gateway,
+            commands::initialize_agent_harness,
+            commands::refresh_agent_harness,
+            commands::run_agent_prompt,
+            commands::pick_directory,
+            commands::create_directory,
+            commands::search_workspace,
+            commands::read_settings,
+            commands::write_settings,
+            commands::provider_environment,
+            commands::import_provider_environment,
+            commands::verify_provider_connection,
+            commands::execute_terminal,
+            commands::start_terminal_process,
+            commands::stop_terminal_process,
         ])
-        .setup(|app| {
+        .setup(|_app| {
             tracing::info!("Tauri app setup complete");
             Ok(())
         })

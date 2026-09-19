@@ -28,3 +28,22 @@ export const spawnOpenClaw = (args: string[]) =>
 
 export const findOpenClawGateway = () =>
   invoke<string>("find_openclaw_gateway");
+
+export const pickDirectory = () =>
+  invoke<string>("pick_directory");
+
+export const createDirectory = (path: string) =>
+  invoke<void>("create_directory", { path });
+
+export interface SearchResult {
+  path: string;
+  line: number;
+  text: string;
+}
+
+export const searchWorkspace = (
+  path: string,
+  query: string,
+  fileFilter: string,
+  caseSensitive: boolean,
+) => invoke<SearchResult[]>("search_workspace", { path, query, fileFilter, caseSensitive });
